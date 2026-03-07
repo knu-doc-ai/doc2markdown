@@ -1,13 +1,14 @@
 # 📄 [LG전자 산학협력] 비전 AI 기반의 레이아웃 보존형 문서-Markdown 자동 변환 에이전트
 
-> [cite_start]**Development of Layout-Aware Document-to-Markdown AI Agent** [cite: 6]
+> **Development of Layout-Aware Document-to-Markdown AI Agent**
 > 
 > **2026 SW중심대학 학부생 중심 산학협력 프로젝트 (LG전자)**
 
 ## 📌 프로젝트 소개
-[cite_start]본 프로젝트는 기업 내 수많은 문서(PDF, 보고서 등)를 LLM 학습 데이터나 기술 블로그로 활용하기 위해 Markdown 형식으로 자동 변환하는 AI 에이전트를 개발합니다[cite: 14]. [cite_start]기존의 단순 텍스트 추출 방식이 가진 한계를 극복하기 위해, 시각적 정보(Layout)와 텍스트 정보(Content)를 결합하여 이해하는 '멀티모달' 접근법을 사용합니다[cite: 15, 16].
 
-[cite_start]**🎯 최종 목표:** 원본 문서의 시각적 레이아웃을 90% 이상 보존하며 배포 가능한 수준의 Markdown 파일을 생성 [cite: 19]
+본 프로젝트는 기업 내 수많은 문서(PDF, 보고서 등)를 LLM 학습 데이터나 기술 블로그로 활용하기 위해 Markdown 형식으로 자동 변환하는 AI 에이전트를 개발합니다. 기존의 단순 텍스트 추출 방식이 가진 한계를 극복하기 위해, 시각적 정보(Layout)와 텍스트 정보(Content)를 결합하여 이해하는 '멀티모달' 접근법을 사용합니다.
+
+**🎯 최종 목표:** 원본 문서의 시각적 레이아웃을 90% 이상 보존하며 배포 가능한 수준의 Markdown 파일을 생성
 
 ## 📂 디렉토리 구조 (Directory Structure)
 
@@ -49,6 +50,7 @@ doc2markdown/
 ## 🚀 시작하기 (Getting Started)
 
 ### 1. 환경 설정
+
 가상환경을 생성하고 활성화한 뒤, 필요한 패키지를 설치합니다.
 
 ~~~bash
@@ -74,9 +76,3 @@ cp .env.example .env
 ~~~bash
 streamlit run src/ui/app.py
 ~~~
-
-## 👥 팀원 및 역할 (Team)
-* **[팀원 1 이름]:** Vision AI 엔지니어 (Layout Analysis & Object Detection)
-* **[팀원 2 이름]:** LLM & 프롬프트 엔지니어 (MD Table Generator & Text Refiner)
-* **[팀원 3 이름]:** 멀티모달 & 평가 엔지니어 (Alt-text Generation & Benchmark)
-* **[팀원 4 이름]:** Full-stack 웹 개발자 (Dashboard UI & Pipeline Integration)
