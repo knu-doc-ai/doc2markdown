@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Layout-Aware Document-to-Markdown</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        body { font-family: 'Malgun Gothic', sans-serif; margin: 0; padding: 0; background-color: #f4f6f8; height: 100vh; display: flex; flex-direction: column; }
+        header { background-color: #a50034; color: white; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .upload-section { padding: 10px 20px; background: white; border-bottom: 1px solid #ddd; }
+        .upload-btn { background-color: #333; color: white; border: none; padding: 8px 15px; cursor: pointer; border-radius: 4px; }
+        .upload-btn:hover { background-color: #555; }
+        
+        /* 3분할 레이아웃의 핵심! */
+        .workspace { display: flex; flex: 1; overflow: hidden; }
+        .pane { flex: 1; display: flex; flex-direction: column; border-right: 1px solid #ccc; background: white; }
+        .pane:last-child { border-right: none; }
+        .pane-title { background: #eee; padding: 10px; margin: 0; font-size: 14px; font-weight: bold; border-bottom: 1px solid #ccc; text-align: center; }
+        
+        /* 각 영역별 세부 설정 */
+        .viewer-area { flex: 1; padding: 20px; overflow-y: auto; background: #fafafa; display: flex; align-items: center; justify-content: center; color: #888; }
+        .editor-area { flex: 1; width: 100%; padding: 15px; border: none; resize: none; font-family: monospace; font-size: 14px; outline: none; box-sizing: border-box; }
+        .preview-area { flex: 1; padding: 15px; overflow-y: auto; line-height: 1.6; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h2 style="margin:0;">📄 LG전자 문서 변환 AI 에이전트</h2>
+        <span id="loading-status" style="display:none;">⏳ AI가 변환 중입니다...</span>
+    </header>
+
+    <div class="upload-section">
+        <input type="file" id="fileInput" accept=".pdf, .png, .jpg">
+        <button class="upload-btn" onclick="uploadDocument()">🚀 멀티모달 AI 변환 시작</button>
+    </div>
+
+    <div class="workspace">
+        <div class="pane">
+            <h3 class="pane-title">👁️ 원본 문서 (Viewer)</h3>
+            <div class="viewer-area" id="viewerContainer">
+                문서를 업로드하면 여기에 원본이 표시됩니다.
+            </div>
+        </div>
+        
+        <div class="pane">
+            <h3 class="pane-title">✍️ Markdown 원문 에디터 (Manual Correction)</h3>
+            <textarea class="editor-area" id="mdEditor" placeholder="변환된 마크다운이 여기에 나타납니다. 직접 수정해 보세요!"></textarea>
+        </div>
+
+        <div class="pane">
+            <h3 class="pane-title">✨ 실시간 렌더링 결과물</h3>
+            <div class="preview-area" id="mdPreview">
+                에디터에 작성된 내용이 HTML로 렌더링되어 보입니다.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const viewerContainer = document.getElementById('viewerContainer');
+        const mdEditor = document.getElementById('mdEditor');
+        const mdPreview = document.getElementById('mdPreview');
+        const loadingStatus = document.getElementById('loading-status');
+
+        // [기능 1] 에디터에 글씨를 쓰면 실시간으로 프리뷰 렌더링
+        mdEditor.addEventListener('input', function() {
+            mdPreview.innerHTML = marked.parse(this.value);
+        });
+
+        // [기능 2] 파일 업로드 및 AI 백엔드 호출
+        async function uploadDocument() {
+            if (!fileInput.files[0]) {
+                alert("파일을 먼저 선택해주세요!");
+                return;
+            }
+
+            const file = fileInput.files[0];
+            
+            // 1. 왼쪽 원본 화면에 선택한 이미지 미리보기 띄우기 (이미지일 경우)
+            if (file.type.startsWith('image/')) {
+                const imgURL = URL.createObjectURL(file);
+                viewerContainer.innerHTML = `<img src="${imgURL}" style="max-width:100%; max-height:100%; object-fit:contain;">`;
+            } else {
+                viewerContainer.innerHTML = "<b>PDF 파일이 업로드되었습니다.</b><br>(뷰어 기능은 추후 연동 예정)";
+            }
+
+            // 2. FastAPI로 파일 전송 (로딩 바 표시)
+            loadingStatus.style.display = 'inline';
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch('/api/convert', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                // 3. 백엔드에서 받은 결과를 에디터에 넣고 프리뷰 업데이트
+                if (data.status === "success") {
+                    mdEditor.value = data.markdown;
+                    mdPreview.innerHTML = marked.parse(data.markdown);
+                }
+            } catch (error) {
+                alert("서버 통신 중 오류가 발생했습니다.");
+                console.error(error);
+            } finally {
+                loadingStatus.style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html>

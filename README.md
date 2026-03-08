@@ -22,10 +22,11 @@ doc2markdown/
 │   ├── temp/                   # 전처리 중 생성되는 임시 파일
 │   └── output/                 # 최종 완성된 .md 파일과 assets ZIP 폴더
 │
-├── src/                        # 💻 메인 소스 코드
-│   ├── ui/                     # [4. Output Layer] 웹 인터페이스 관련
-│   │   ├── app.py              # Streamlit/Gradio 대시보드 실행 파일
-│   │   └── components.py       # 원본-프리뷰 대조 및 수동 보정 UI 컴포넌트
+├── src/
+|   └── api/                        # 기존 ui 폴더를 api 폴더로 변경
+|       ├── main.py                 # [Backend] FastAPI 서버 및 API 라우터
+|       └── templates/              
+|            └── index.html          # [Frontend] 3분할 웹 화면 (HTML+CSS+JS)
 │   │
 │   ├── modules/                # 핵심 AI 엔진 모듈
 │   │   ├── ingestion.py        # [1. Input Layer] PDF 파싱 및 전처리
