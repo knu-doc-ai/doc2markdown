@@ -10,3 +10,6 @@ env/
 data/
 __pycache__/
 *.pyc
+
+# VS Code 개인 설정 및 에디터 캐시 제외
+.vscode/
