@@ -9,7 +9,6 @@ python-dotenv>=1.0.1
 
 # 2. 문서 전처리 및 시각 구조 분석 (Input Layer & Visual Analysis)
 marker-pdf>=0.3.2
-pdf2image>=1.17.0
 PyMuPDF>=1.24.0
 unstructured>=0.12.5
 
