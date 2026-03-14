@@ -94,7 +94,7 @@ class FilePreProcessor:
 # 모듈 테스트용 코드
 # ==========================================
 if __name__ == "__main__":
-    sample_file = "data/raw/test.pdf"
+    sample_file = "data/raw/calculator_srs_final.pdf"
     
     print("이 파일을 직접 실행하면 테스트가 진행됩니다.")
     processor = FilePreProcessor()

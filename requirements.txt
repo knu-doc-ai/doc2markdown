@@ -18,7 +18,7 @@ opencv-python==4.9.0.80   # 에러 났던 부분! 정확한 버전으로 수정 
 
 # 4. 데이터 조작 및 표(Table) 처리
 pandas>=2.2.1
-numpy>=1.26.4
+numpy>=1.26.4,<2.0.0
 
 # 5. 사용자 인터페이스 & 백엔드 API (Output Layer & UI)
 fastapi>=0.110.0
