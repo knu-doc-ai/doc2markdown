@@ -8,6 +8,8 @@ from PIL import Image
 from paddleocr import PaddleOCR
 from docling.document_converter import DocumentConverter
 
+# opencv 4.6.0.66, numpy < 2.0, paddleocr 2.7.3, torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118, paddlepaddle-gpu==2.6.1.post117, python 3.10.19
+
 # ==========================================
 # 1. 듀얼 OCR 엔진 초기화
 # ==========================================
