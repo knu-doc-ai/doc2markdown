@@ -19,7 +19,7 @@ def run_layoutlm_engine(image_path):
     try:
         from transformers import pipeline
         
-        # MS 모델
+        # MS
         layout_analyzer = pipeline(
             "object-detection", 
             model="microsoft/table-transformer-detection" 
