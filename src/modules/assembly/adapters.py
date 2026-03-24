@@ -7,6 +7,13 @@ from typing import Any
 from modules.assembly._layout_adapter import LayoutAdapterMixin
 from modules.assembly._table_adapter import TableAdapterMixin
 from modules.assembly.ir import AssemblyResult, AssembledDocument
+from modules.assembly.types import (
+    FIGURE_REF_ID_ATTR,
+    MERGED_METADATA_LAYOUT_KEY,
+    MERGED_METADATA_TABLE_KEY,
+    NOTE_REF_ID_ATTR,
+    TABLE_REF_ID_ATTR,
+)
 
 
 class AssemblyInputAdapter(LayoutAdapterMixin, TableAdapterMixin):
@@ -54,25 +61,25 @@ class AssemblyInputAdapter(LayoutAdapterMixin, TableAdapterMixin):
             table_refs=cls._merge_ref_list(
                 layout_result.document.table_refs,
                 table_result.document.table_refs,
-                id_attr="table_id",
+                id_attr=TABLE_REF_ID_ATTR,
             ),
             figure_refs=cls._merge_ref_list(
                 layout_result.document.figure_refs,
                 table_result.document.figure_refs,
-                id_attr="figure_id",
+                id_attr=FIGURE_REF_ID_ATTR,
             ),
             note_refs=cls._merge_ref_list(
                 layout_result.document.note_refs,
                 table_result.document.note_refs,
-                id_attr="note_id",
+                id_attr=NOTE_REF_ID_ATTR,
             ),
             figure_assets_metadata={
                 **dict(layout_result.document.figure_assets_metadata),
                 **dict(table_result.document.figure_assets_metadata),
             },
             metadata={
-                "layout": dict(layout_result.document.metadata),
-                "table": dict(table_result.document.metadata),
+                MERGED_METADATA_LAYOUT_KEY: dict(layout_result.document.metadata),
+                MERGED_METADATA_TABLE_KEY: dict(table_result.document.metadata),
             },
             raw=raw,
         )

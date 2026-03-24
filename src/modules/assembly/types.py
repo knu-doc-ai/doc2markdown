@@ -84,6 +84,15 @@ ASSEMBLED_NODE_TABLE_REF: AssembledNodeType = "table_ref"
 ASSEMBLED_NODE_FIGURE_REF: AssembledNodeType = "figure_ref"
 ASSEMBLED_NODE_NOTE_REF: AssembledNodeType = "note_ref"
 
+# 병합 단계에서 ref 식별 필드명을 문자열 상수로 고정한다.
+TABLE_REF_ID_ATTR = "table_id"
+FIGURE_REF_ID_ATTR = "figure_id"
+NOTE_REF_ID_ATTR = "note_id"
+
+# 병합된 document.metadata 안에서 어댑터별 메타데이터를 구분하는 키
+MERGED_METADATA_LAYOUT_KEY = "layout"
+MERGED_METADATA_TABLE_KEY = "table"
+
 
 __all__ = [
     "BBox",
@@ -101,4 +110,9 @@ __all__ = [
     "ASSEMBLED_NODE_TABLE_REF",
     "ASSEMBLED_NODE_FIGURE_REF",
     "ASSEMBLED_NODE_NOTE_REF",
+    "TABLE_REF_ID_ATTR",
+    "FIGURE_REF_ID_ATTR",
+    "NOTE_REF_ID_ATTR",
+    "MERGED_METADATA_LAYOUT_KEY",
+    "MERGED_METADATA_TABLE_KEY",
 ]
