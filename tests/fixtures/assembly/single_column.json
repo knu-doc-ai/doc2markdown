@@ -1,0 +1,43 @@
+{
+  "pages": [
+    {
+      "page": 1,
+      "width": 800,
+      "height": 1200,
+      "median_line_height": 14,
+      "body_font_size": 12,
+      "column_count": 1,
+      "elements": [
+        {
+          "id": "h1",
+          "page": 1,
+          "label": "heading",
+          "bbox": [50, 40, 550, 90],
+          "text": "Document Title",
+          "confidence": 0.98
+        },
+        {
+          "id": "p1",
+          "page": 1,
+          "label": "text",
+          "bbox": [50, 120, 550, 160],
+          "text": "First paragraph."
+        },
+        {
+          "id": "p2",
+          "page": 1,
+          "label": "paragraph",
+          "bbox": [50, 170, 550, 210],
+          "text": "Second paragraph."
+        },
+        {
+          "id": "li1",
+          "page": 1,
+          "label": "list_item",
+          "bbox": [70, 240, 550, 270],
+          "text": "Item one"
+        }
+      ]
+    }
+  ]
+}

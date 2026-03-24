@@ -1,0 +1,55 @@
+{
+  "layout_output": {
+    "pages": [
+      {
+        "page": 1,
+        "width": 1000,
+        "height": 1400,
+        "elements": [
+          {
+            "id": "intro_1",
+            "page": 1,
+            "label": "text",
+            "bbox": [50, 40, 950, 80],
+            "text": "Intro paragraph"
+          },
+          {
+            "id": "table_1",
+            "page": 1,
+            "label": "table",
+            "bbox": [120, 150, 880, 500]
+          },
+          {
+            "id": "cap_1",
+            "page": 1,
+            "label": "caption",
+            "bbox": [120, 520, 880, 560],
+            "text": "Table 1. Result summary"
+          },
+          {
+            "id": "note_1",
+            "page": 1,
+            "label": "note",
+            "bbox": [120, 580, 880, 620],
+            "text": "Note: estimated value"
+          }
+        ]
+      }
+    ]
+  },
+  "table_output": {
+    "tables": [
+      {
+        "table_id": "table_1",
+        "page": 1,
+        "bbox": [120, 150, 880, 500],
+        "caption_id": "cap_1",
+        "note_ids": ["note_1"],
+        "rows": 3,
+        "columns": 4,
+        "parser": "stub",
+        "source_block_ids": ["table_1"]
+      }
+    ]
+  }
+}
