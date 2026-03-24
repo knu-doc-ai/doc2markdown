@@ -13,3 +13,7 @@ __pycache__/
 
 # VS Code 개인 설정 및 에디터 캐시 제외
 .vscode/
+.idea/
+
+# Local scratch artifacts
+.wiki_tmp/

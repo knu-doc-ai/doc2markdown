@@ -68,3 +68,12 @@ class VisionEngine:
             
         print(f"✅ [Vision] 분석 완료! 결과물 저장소: {doc_output_dir}")
         return ingestion_data
+
+
+class LayoutAnalyzer(VisionEngine):
+    """
+    기존 VisionEngine을 파이프라인 단계 이름에 맞춰 감싼 어댑터입니다.
+    """
+
+    def analyze(self, ingestion_data: Dict[str, Any]) -> Dict[str, Any]:
+        return self.process_document(ingestion_data)
