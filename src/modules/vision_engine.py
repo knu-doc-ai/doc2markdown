@@ -1,19 +1,31 @@
 import os
 import json
+import dill
+from typing import Dict, Any, List
 from PIL import Image
 from ultralytics import YOLO
 from huggingface_hub import hf_hub_download
-from typing import Dict, Any, List
+
 
 class VisionEngine:
     def __init__(self, output_base_dir: str = "data/output"):
         self.output_base_dir = output_base_dir
         # 문서 전용 YOLOv8 가중치 다운로드 및 로드
         print("🚀 [Vision] 문서 레이아웃 전용 YOLO 모델 로드 중...")
-        model_path = hf_hub_download(repo_id="hantian/yolo-doclaynet", filename="yolov8s-doclaynet.pt")
-        self.model = YOLO(model_path)
+        
+        try:
+            # hantian 개발자의 YOLOv8x 기반 DocLayNet 가중치 다운로드
+            model_path = hf_hub_download(
+                repo_id="DILHTWD/documentlayoutsegmentation_YOLOv8_ondoclaynet", 
+                filename="yolov8x-doclaynet-epoch64-imgsz640-initiallr1e-4-finallr1e-5.pt"
+            )
+            self.model = YOLO(model_path)
+            print("✅ [Vision] YOLOv8x 모델 로드 완료!")
+        except Exception as e:
+            print(f"🚨 [Vision] 모델 로드 실패: {e}")
+            raise
 
-    def process_document(self, ingestion_data: Dict):
+    def process_document(self, ingestion_data: Dict) -> Dict[str, Any]:
         file_name = ingestion_data["file_name"]
         # 파일별로 독립된 결과 폴더 생성
         doc_output_dir = os.path.join(self.output_base_dir, file_name)
@@ -24,7 +36,7 @@ class VisionEngine:
 
         for page in ingestion_data["pages"]:
             img_path = page["image_path"]
-            results = self.model(img_path)[0]
+            results = self.model(img_path, conf=0.35, imgsz=960)[0]
             
             page_elements = []
             
@@ -49,17 +61,16 @@ class VisionEngine:
                     crop_name = f"p{page['page_num']}_{label.lower()}_{i+1}.png"
                     save_path = os.path.join(crop_dir, crop_name)
                     
-                    full_img = Image.open(img_path)
-                    cropped_img = full_img.crop(coords)
-                    cropped_img.save(save_path)
+                    with Image.open(img_path) as full_img:
+                        cropped_img = full_img.crop(coords)
+                        cropped_img.save(save_path)
                     
                     element["crop_path"] = save_path
                 
                 page_elements.append(element)
 
             # 읽기 순서 정렬 (Y좌표 우선, 그 다음 X좌표)
-            page_elements.sort(key=lambda x: (x["bbox"][1], x["bbox"][0]))
-            page["elements"] = page_elements
+            page["elements"] = sorted(page_elements, key=lambda x: (x["bbox"][1], x["bbox"][0]))
 
         # 메타데이터 파일 생성
         meta_path = os.path.join(doc_output_dir, "metadata.json")
