@@ -63,8 +63,6 @@ class AssemblyAdapterCommon:
         "page_num",
         "page_number",
     )
-    # 복합 payload 안에서 문서 루트 성격의 중첩 컨테이너를 찾기 위한 키 후보
-    DOCUMENT_CONTAINER_KEYS: Tuple[str, ...] = ("document",)
     # table 항목 리스트를 찾기 위한 필드명 후보
     TABLE_LIST_KEYS: Tuple[str, ...] = (
         "table_refs",
@@ -366,14 +364,10 @@ class AssemblyAdapterCommon:
     @classmethod
     def _has_table_shape(cls, raw: Any) -> bool:
         if isinstance(raw, dict):
-            if cls._pick_first(raw, cls.TABLE_LIST_KEYS) is not None:
-                return True
-
-            document_payload = cls._pick_first(raw, cls.DOCUMENT_CONTAINER_KEYS)
-            if isinstance(document_payload, dict) and cls._pick_first(document_payload, cls.TABLE_LIST_KEYS):
-                return True
-
-            return cls._looks_like_table_entry(raw)
+            return (
+                cls._pick_first(raw, cls.TABLE_LIST_KEYS) is not None
+                or cls._looks_like_table_entry(raw)
+            )
 
         return cls._is_table_sequence(raw)
 
@@ -382,14 +376,14 @@ class AssemblyAdapterCommon:
         if not isinstance(raw, (list, tuple)) or not raw:
             return False
 
-        return any(isinstance(item, AssemblyElement) or cls._looks_like_element_entry(item) for item in raw)
+        return any(cls._looks_like_element_entry(item) for item in raw)
 
     @classmethod
     def _is_table_sequence(cls, raw: Any) -> bool:
         if not isinstance(raw, (list, tuple)) or not raw:
             return False
 
-        return all(isinstance(item, TableRef) or cls._looks_like_table_entry(item) for item in raw)
+        return any(cls._looks_like_table_entry(item) for item in raw)
 
     @classmethod
     def _looks_like_element_entry(cls, raw: Any) -> bool:

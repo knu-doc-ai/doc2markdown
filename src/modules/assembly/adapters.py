@@ -32,15 +32,16 @@ class AssemblyInputAdapter(LayoutAdapterMixin, TableAdapterMixin):
         if isinstance(raw, AssembledDocument):
             return AssemblyResult(document=raw, raw=raw)
 
-        layout_source = cls._resolve_layout_source(raw)
-        table_source = cls._resolve_table_source(raw)
+        layout_source = cls._resolve_layout_source(raw) # layout 후보를 찾는다.
+        table_source = cls._resolve_table_source(raw) # table 후보를 찾는다.
 
+        # 둘 다 찾지 못했고 raw 자체는 비어 있지 않으면, raw를 layout 입력으로 한 번 더 해석해 본다.
         if layout_source is None and table_source is None and raw is not None:
             layout_source = raw
 
-        layout_result = cls.from_layout_output(layout_source)
-        table_result = cls.from_table_output(table_source)
-        return cls._merge_results(layout_result, table_result, raw)
+        layout_result = cls.from_layout_output(layout_source) # layout seed를 만든다.
+        table_result = cls.from_table_output(table_source) # table seed를 만든다.
+        return cls._merge_results(layout_result, table_result, raw) # 두 결과를 병합한다.
 
     @classmethod
     def _merge_results(

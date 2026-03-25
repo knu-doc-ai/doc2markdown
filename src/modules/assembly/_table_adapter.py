@@ -50,18 +50,14 @@ class TableAdapterMixin(AssemblyAdapterCommon):
     def _resolve_table_source(cls, raw: Any) -> Any:
         """복합 payload 안에서 table 후보를 찾는다."""
         if isinstance(raw, dict):
+            # TABLE_CONTAINER_KEYS 순서대로 검사한다.
             nested = cls._pick_first(raw, cls.TABLE_CONTAINER_KEYS)
+            # 명시적 table 컨테이너가 있으면 그 값을 반환한다.
             if nested is not None:
                 return nested
 
-            document_payload = cls._pick_first(raw, cls.DOCUMENT_CONTAINER_KEYS)
-            if cls._has_table_shape(document_payload):
-                return document_payload
-
-            if cls._has_table_shape(raw) and not cls._has_layout_shape(raw):
-                return raw
-
-        if cls._is_table_sequence(raw):
+        # 명시적 table 컨테이너가 없으면 raw 자체가 table처럼 생겼는지 본다.
+        if cls._has_table_shape(raw) and not cls._has_layout_shape(raw):
             return raw
 
         return None
@@ -105,13 +101,7 @@ class TableAdapterMixin(AssemblyAdapterCommon):
         if not isinstance(raw, dict):
             return table_refs, warnings
 
-        document_payload = cls._pick_first(raw, cls.DOCUMENT_CONTAINER_KEYS)
-        if not isinstance(document_payload, dict):
-            document_payload = None
         table_entries = cls._coerce_list(cls._pick_first(raw, cls.TABLE_LIST_KEYS))
-
-        if not table_entries and document_payload is not None:
-            table_entries = cls._coerce_list(cls._pick_first(document_payload, cls.TABLE_LIST_KEYS))
 
         if not table_entries and cls._looks_like_table_entry(raw):
             table_entries = [raw]
