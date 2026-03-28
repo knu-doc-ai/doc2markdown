@@ -193,15 +193,15 @@ if __name__ == "__main__":
     import time
     start = time.time()
     if os.path.exists(target_image):
-        print(f"\n🚀 '{target_image}' 파싱 시작...")
+        print(f"\n'{target_image}' 파싱 시작...")
         final_md = process_table_hybrid(target_image)
         
         print(final_md) 
         
         with open("final_perfect_markdown.md", "w", encoding="utf-8") as f:
             f.write(final_md)
-        print("✅ 'final_perfect_markdown.md' 파일이 성공적으로 저장되었습니다")
+        print("'final_perfect_markdown.md' 파일이 성공적으로 저장되었습니다") #후에 마크다운 파일 저장안하고 그냥 반환하는 형식으로 변경하면 됨
     else:
-        print(f"❌ '{target_image}' 파일을 찾을 수 없습니다.")
+        print(f"'{target_image}' 파일을 찾을 수 없습니다.")
     end = time.time()
     print(f"걸린 시간 : {end - start}")
