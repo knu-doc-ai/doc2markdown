@@ -24,10 +24,89 @@ class VisionEngine:
         except Exception as e:
             print(f"🚨 [Vision] 모델 로드 실패: {e}")
             raise
+    
+    def _get_intersection_area(self, box1: List[float], box2: List[float]) -> float:
+        """두 Bounding Box가 겹치는 영역의 넓이를 계산합니다."""
+        x_left = max(box1[0], box2[0])
+        y_top = max(box1[1], box2[1])
+        x_right = min(box1[2], box2[2])
+        y_bottom = min(box1[3], box2[3])
+        
+        if x_right < x_left or y_bottom < y_top:
+            return 0.0
+        return (x_right - x_left) * (y_bottom - y_top)
+    
+    def _get_box_area(self, box: List[float]) -> float:
+        """Bounding Box의 넓이를 계산합니다."""
+        return (box[2] - box[0]) * (box[3] - box[1])
+    
+    def _postprocess_elements(self, elements: List[Dict]) -> List[Dict]:
+        """
+        [세션 B: 후처리 필터]
+        겹치는 박스 중 우선순위와 신뢰도에 따라 유효한 박스만 남깁니다.
+        """
+        to_remove = set()
+        
+        # 라벨별 우선순위 가중치 (표와 그림을 최우선으로 보호)
+        priority = {
+            "Table": 5, 
+            "Picture": 4, 
+            "Figure": 4, 
+            "Formula": 3, 
+            "Section-header": 2, 
+            "Text": 1, 
+            "List-item": 1, 
+            "Page-header": 0, 
+            "Page-footer": 0
+        }
 
+        for i in range(len(elements)):
+            if i in to_remove:
+                continue
+            for j in range(i + 1, len(elements)):
+                if j in to_remove:
+                    continue
+
+                box1, box2 = elements[i]["bbox"], elements[j]["bbox"]
+                inter_area = self._get_intersection_area(box1, box2)
+                
+                # 겹치는 영역이 없으면 패스
+                if inter_area == 0:
+                    continue
+                
+                area1, area2 = self._get_box_area(box1), self._get_box_area(box2)
+                min_area = min(area1, area2)
+                
+                # 두 박스 중 더 작은 박스 면적의 70% 이상이 겹친다면 (포함 관계라면)
+                if (inter_area / min_area) > 0.70:
+                    type1, type2 = elements[i]["type"], elements[j]["type"]
+                    p1, p2 = priority.get(type1, 0), priority.get(type2, 0)
+                    
+                    # 1순위: 우선순위가 높은 라벨 승리
+                    if p1 > p2:
+                        to_remove.add(j)
+                    elif p2 > p1:
+                        to_remove.add(i)
+                        break # i가 죽었으므로 j와의 추가 비교 중단
+                    else:
+                        # 2순위: 라벨 우선순위가 같다면 신뢰도(Confidence) 높은 놈 승리
+                        if elements[i]["confidence"] >= elements[j]["confidence"]:
+                            to_remove.add(j)
+                        else:
+                            to_remove.add(i)
+                            break
+
+        # 살아남은 객체들만 모아서 Y좌표 순서대로 최종 정렬
+        valid_elements = [el for idx, el in enumerate(elements) if idx not in to_remove]
+        valid_elements = sorted(valid_elements, key=lambda x: (x["bbox"][1], x["bbox"][0]))
+        
+        for idx, el in enumerate(valid_elements):
+            el["id"] = idx + 1
+            
+        return valid_elements
+    
     def process_document(self, ingestion_data: Dict) -> Dict[str, Any]:
         file_name = ingestion_data["file_name"]
-        # 파일별로 독립된 결과 폴더 생성
         doc_output_dir = os.path.join(self.output_base_dir, file_name)
         crop_dir = os.path.join(doc_output_dir, "crops")
         os.makedirs(crop_dir, exist_ok=True)
@@ -36,9 +115,9 @@ class VisionEngine:
 
         for page in ingestion_data["pages"]:
             img_path = page["image_path"]
-            results = self.model(img_path, conf=0.35, imgsz=960)[0]
+            results = self.model(img_path, conf=0.25, iou=0.45, imgsz=640)[0]
             
-            page_elements = []
+            raw_elements = []
             
             # YOLO 탐지 결과 순회
             for i, box in enumerate(results.boxes):
@@ -49,7 +128,6 @@ class VisionEngine:
                 conf = float(box.conf[0])
 
                 element = {
-                    "id": i + 1,
                     "type": label,
                     "bbox": coords,
                     "confidence": conf,
@@ -67,19 +145,21 @@ class VisionEngine:
                     
                     element["crop_path"] = save_path
                 
-                page_elements.append(element)
+                raw_elements.append(element)
 
-            # 읽기 순서 정렬 (Y좌표 우선, 그 다음 X좌표)
-            page["elements"] = sorted(page_elements, key=lambda x: (x["bbox"][1], x["bbox"][0]))
+                # 2. 후처리 필터 적용 (중복 제거 및 정렬)
+            cleaned_elements = self._postprocess_elements(raw_elements)
+            page["elements"] = cleaned_elements
+            
+            print(f"   - {page['page_num']}페이지: 탐지 {len(raw_elements)}개 -> 정제 후 {len(cleaned_elements)}개 요소 확보")
 
-        # 메타데이터 파일 생성
+        # 메타데이터 저장
         meta_path = os.path.join(doc_output_dir, "metadata.json")
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(ingestion_data, f, ensure_ascii=False, indent=4)
             
-        print(f"✅ [Vision] 분석 완료! 결과물 저장소: {doc_output_dir}")
+        print(f"✅ [Vision] 분석 완료! 결과물 저장: {meta_path}")
         return ingestion_data
-
 
 class LayoutAnalyzer(VisionEngine):
     """
