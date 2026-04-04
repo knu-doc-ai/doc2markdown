@@ -105,60 +105,59 @@ class VisionEngine:
             
         return valid_elements
     
-    def process_document(self, ingestion_data: Dict) -> Dict[str, Any]:
+    def process_document(self, ingestion_data: Dict[str, Any]) -> Dict[str, Any]:
         file_name = ingestion_data["file_name"]
         doc_output_dir = os.path.join(self.output_base_dir, file_name)
         crop_dir = os.path.join(doc_output_dir, "crops")
         os.makedirs(crop_dir, exist_ok=True)
 
-        print(f"👁️ [Vision] '{file_name}' 시각 분석 및 객체 추출 시작...")
+        # ⭐ 멀티 스케일 (640 & 960) 앙상블 모드
+        print(f"👁️ [Vision] '{file_name}' 분석 시작 (Multi-Scale 앙상블 모드)...")
 
         for page in ingestion_data["pages"]:
             img_path = page["image_path"]
-            results = self.model(img_path, conf=0.25, iou=0.45, imgsz=640)[0]
-            
             raw_elements = []
             
-            # YOLO 탐지 결과 순회
-            for i, box in enumerate(results.boxes):
-                # 좌표 및 클래스 정보 추출
-                coords = box.xyxy[0].tolist() # [xmin, ymin, xmax, ymax]
-                cls_id = int(box.cls[0])
-                label = results.names[cls_id]
-                conf = float(box.conf[0])
-
-                element = {
-                    "type": label,
-                    "bbox": coords,
-                    "confidence": conf,
-                    "crop_path": None
-                }
-
-                # 'Table'이나 'Picture'등은 따로 잘라서 저장
-                if label in ["Table", "Picture", "Figure", "Formula"]:
-                    crop_name = f"p{page['page_num']}_{label.lower()}_{i+1}.png"
-                    save_path = os.path.join(crop_dir, crop_name)
-                    
-                    with Image.open(img_path) as full_img:
-                        cropped_img = full_img.crop(coords)
-                        cropped_img.save(save_path)
-                    
-                    element["crop_path"] = save_path
+            # 1. 두 가지 해상도로 각각 스캔하여 박스 긁어모으기
+            for size in [640, 960]:
+                results = self.model(img_path, conf=0.25, iou=0.45, imgsz=size)[0]
                 
-                raw_elements.append(element)
-
-                # 2. 후처리 필터 적용 (중복 제거 및 정렬)
-            cleaned_elements = self._postprocess_elements(raw_elements)
-            page["elements"] = cleaned_elements
+                for box in results.boxes:
+                    coords = box.xyxy[0].tolist()
+                    cls_id = int(box.cls[0])
+                    label = results.names[cls_id]
+                    conf = float(box.conf[0])
+                    
+                    raw_elements.append({
+                        "type": label,
+                        "bbox": coords,
+                        "confidence": conf,
+                        "crop_path": None # 크롭은 생존자만 나중에!
+                    })
             
-            print(f"   - {page['page_num']}페이지: 탐지 {len(raw_elements)}개 -> 정제 후 {len(cleaned_elements)}개 요소 확보")
+            # 2. 후처리 필터(NMS)로 640과 960의 겹치는 박스 제거 (똑똑한 놈만 생존)
+            cleaned_elements = self._postprocess_elements(raw_elements)
+            
+            # 3. 생존한 객체들만 모아서 최종 이미지 크롭 진행 (디스크 I/O 최적화)
+            with Image.open(img_path) as full_img:
+                for el in cleaned_elements:
+                    if el["type"] in ["Table", "Picture", "Figure", "Formula"]:
+                        crop_name = f"p{page['page_num']}_{el['type'].lower()}_{el['id']}.png"
+                        save_path = os.path.join(crop_dir, crop_name)
+                        
+                        cropped_img = full_img.crop(el["bbox"])
+                        cropped_img.save(save_path)
+                        el["crop_path"] = save_path
+
+            page["elements"] = cleaned_elements
+            print(f"   - {page['page_num']}페이지: 스캔 {len(raw_elements)}개 -> 최종 생존 {len(cleaned_elements)}개")
 
         # 메타데이터 저장
         meta_path = os.path.join(doc_output_dir, "metadata.json")
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(ingestion_data, f, ensure_ascii=False, indent=4)
             
-        print(f"✅ [Vision] 분석 완료! 결과물 저장: {meta_path}")
+        print(f"✅ [Vision] 멀티 스케일 앙상블 분석 완료! 결과물 저장: {meta_path}")
         return ingestion_data
 
 class LayoutAnalyzer(VisionEngine):
