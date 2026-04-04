@@ -25,6 +25,15 @@ class DocumentAssembler:
         """
         return AssemblyInputAdapter.from_raw(raw)
 
+    def build_from_outputs(self, layout_output: Any, table_output: Any = None) -> AssemblyResult:
+        """
+        layout/table 출력을 명시적으로 받아 초기 Assembly IR을 만든다.
+
+        Layout Analysis와 Table Extraction이 서로 다른 타이밍에 연결될 때
+        상위 파이프라인이 raw payload 포맷을 직접 조립하지 않아도 되게 하는 얇은 헬퍼다.
+        """
+        return AssemblyInputAdapter.from_outputs(layout_output, table_output)
+
 
 __all__ = [
     "DocumentAssembler",

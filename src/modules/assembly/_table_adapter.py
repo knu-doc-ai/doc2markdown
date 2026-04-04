@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """table 출력 전용 Assembly 어댑터."""
 
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from modules.assembly._adapter_base import AssemblyAdapterCommon
 from modules.assembly.ir import AssemblyResult, AssemblyWarning, AssembledDocument, TableRef
@@ -33,7 +33,7 @@ class TableAdapterMixin(AssemblyAdapterCommon):
         return AssemblyResult(
             document=AssembledDocument(
                 table_refs=table_refs,
-                metadata={"adapter": "table"},
+                metadata=cls._extract_table_document_metadata(raw),
                 raw=raw,
             ),
             warnings=warnings,
@@ -79,6 +79,20 @@ class TableAdapterMixin(AssemblyAdapterCommon):
         return "raw"
 
     @classmethod
+    def _extract_table_document_metadata(cls, raw: Any) -> Dict[str, Any]:
+        """table payload 상위 메타데이터를 그대로 보존한다."""
+        if not isinstance(raw, dict):
+            return {}
+
+        return cls._extract_metadata(
+            raw,
+            {
+                *cls.TABLE_LIST_KEYS,
+                *cls.TABLE_MARKDOWN_KEYS,
+            },
+        )
+
+    @classmethod
     def _extract_table_refs(
         cls,
         raw: Any,
@@ -86,26 +100,7 @@ class TableAdapterMixin(AssemblyAdapterCommon):
         table_refs: List[TableRef] = []
         warnings: List[AssemblyWarning] = []
 
-        if isinstance(raw, list):
-            for index, item in enumerate(raw, start=1):
-                table_ref, item_warnings = cls._build_table_ref(
-                    item,
-                    fallback_page=None,
-                    fallback_id=cls._make_table_fallback_id(index),
-                )
-                if table_ref is not None:
-                    table_refs.append(table_ref)
-                warnings.extend(item_warnings)
-            return table_refs, warnings
-
-        if not isinstance(raw, dict):
-            return table_refs, warnings
-
-        table_entries = cls._coerce_list(cls._pick_first(raw, cls.TABLE_LIST_KEYS))
-
-        if not table_entries and cls._looks_like_table_entry(raw):
-            table_entries = [raw]
-
+        table_entries = cls._extract_table_entries(raw)
         for index, item in enumerate(table_entries, start=1):
             table_ref, item_warnings = cls._build_table_ref(
                 item,
@@ -119,6 +114,42 @@ class TableAdapterMixin(AssemblyAdapterCommon):
         return table_refs, warnings
 
     @classmethod
+    def _extract_table_entries(cls, raw: Any) -> List[Any]:
+        """dict/list/string 어느 형태든 table entry 리스트로 평탄화한다."""
+        if raw is None:
+            return []
+
+        if cls._looks_like_markdown_table(raw):
+            return [{"markdown": raw}]
+
+        if isinstance(raw, list):
+            entries: List[Any] = []
+            for item in raw:
+                if cls._looks_like_markdown_table(item):
+                    entries.append({"markdown": item})
+                else:
+                    entries.append(item)
+            return entries
+
+        if not isinstance(raw, dict):
+            return [raw]
+
+        table_entries = cls._coerce_list(cls._pick_first(raw, cls.TABLE_LIST_KEYS))
+        if table_entries:
+            normalized_entries: List[Any] = []
+            for item in table_entries:
+                if cls._looks_like_markdown_table(item):
+                    normalized_entries.append({"markdown": item})
+                else:
+                    normalized_entries.append(item)
+            return normalized_entries
+
+        if cls._looks_like_table_entry(raw):
+            return [raw]
+
+        return []
+
+    @classmethod
     def _build_table_ref(
         cls,
         raw: Any,
@@ -130,11 +161,34 @@ class TableAdapterMixin(AssemblyAdapterCommon):
         if isinstance(raw, TableRef):
             return raw, warnings
 
-        payload = raw if isinstance(raw, dict) else {"table_id": raw}
+        if cls._looks_like_markdown_table(raw):
+            payload: Dict[str, Any] = {"markdown": raw}
+        elif isinstance(raw, dict):
+            payload = raw
+        else:
+            payload = {"table_id": raw}
+
+        metadata = cls._extract_metadata(
+            payload,
+            {
+                *cls.TABLE_ID_KEYS,
+                *cls.PAGE_NUMBER_KEYS,
+                *cls.BBOX_KEYS,
+                *cls.CAPTION_KEYS,
+                *cls.NOTE_KEYS,
+                *cls.SOURCE_BLOCK_IDS_KEYS,
+            },
+        )
+
+        markdown = cls._normalize_markdown_table(cls._pick_first(payload, cls.TABLE_MARKDOWN_KEYS))
+        if markdown is not None:
+            metadata["markdown"] = markdown
+            metadata["content_format"] = "markdown"
 
         table_id = cls._normalize_str(cls._pick_first(payload, cls.TABLE_ID_KEYS))
         if table_id is None:
             table_id = fallback_id
+            metadata["generated_table_id"] = True
             warnings.append(
                 AssemblyWarning(
                     code=cls.WARNING_TABLE_MISSING_ID,
@@ -152,6 +206,7 @@ class TableAdapterMixin(AssemblyAdapterCommon):
         )
         if page is None:
             page = 1
+            metadata["generated_page"] = True
             warnings.append(
                 AssemblyWarning(
                     code=cls.WARNING_TABLE_MISSING_PAGE,
@@ -163,27 +218,14 @@ class TableAdapterMixin(AssemblyAdapterCommon):
                 )
             )
 
-        caption_id = cls._normalize_ref_id(cls._pick_first(payload, cls.CAPTION_KEYS))
-        note_ids = cls._normalize_id_list(cls._pick_first(payload, cls.NOTE_KEYS))
-
         table_ref = TableRef(
             table_id=table_id,
             page=page,
             bbox=cls._normalize_bbox(cls._pick_first(payload, cls.BBOX_KEYS) or payload),
-            caption_id=caption_id,
-            note_ids=note_ids,
+            caption_id=cls._normalize_ref_id(cls._pick_first(payload, cls.CAPTION_KEYS)),
+            note_ids=cls._normalize_id_list(cls._pick_first(payload, cls.NOTE_KEYS)),
             source_block_ids=cls._extract_source_block_ids(payload),
-            metadata=cls._extract_metadata(
-                payload,
-                {
-                    *cls.TABLE_ID_KEYS,
-                    *cls.PAGE_NUMBER_KEYS,
-                    *cls.BBOX_KEYS,
-                    *cls.CAPTION_KEYS,
-                    *cls.NOTE_KEYS,
-                    *cls.SOURCE_BLOCK_IDS_KEYS,
-                },
-            ),
+            metadata=metadata,
             raw=raw,
         )
         return table_ref, warnings

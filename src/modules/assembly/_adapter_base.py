@@ -110,11 +110,30 @@ class AssemblyAdapterCommon:
     NOTE_KEYS: Tuple[str, ...] = ("note_ids", "notes", "note_refs")
     # table 구조 자체를 뜻하는 필드명 후보
     TABLE_STRUCTURE_KEYS: Tuple[str, ...] = ("cells", "rows", "columns")
+    # 표 마크다운 본문을 담는 필드명 후보
+    TABLE_MARKDOWN_KEYS: Tuple[str, ...] = (
+        "markdown",
+        "table_markdown",
+        "md",
+        "table_md",
+    )
+    # table crop/image 경로를 담는 필드명 후보
+    TABLE_IMAGE_KEYS: Tuple[str, ...] = (
+        "crop_path",
+        "image_path",
+        "table_image_path",
+    )
     # figure asset metadata를 찾기 위한 문서 단위 필드명 후보
     FIGURE_ASSET_KEYS: Tuple[str, ...] = (
         "figure_assets_metadata",
         "figure_assets",
         "figure_asset_map",
+    )
+    # 문서 단위 상위 메타데이터 필드 후보
+    DOCUMENT_METADATA_KEYS: Tuple[str, ...] = (
+        "file_name",
+        "file_type",
+        "total_pages",
     )
     # note/caption 참조 객체 내부의 id 필드 후보
     REF_ID_KEYS: Tuple[str, ...] = ("id", "note_id", "caption_id", "uuid")
@@ -337,6 +356,39 @@ class AssemblyAdapterCommon:
         return cls._normalize_str(value)
 
     @classmethod
+    def _looks_like_markdown_table(cls, value: Any) -> bool:
+        """문자열이 markdown table 본문인지 느슨하게 판별한다."""
+        text = cls._normalize_str(value)
+        if text is None:
+            return False
+
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if len(lines) < 2:
+            return False
+
+        header_line = lines[0]
+        divider_line = lines[1]
+        if "|" not in header_line or "|" not in divider_line:
+            return False
+
+        divider_chars = (
+            divider_line
+            .replace("|", "")
+            .replace(":", "")
+            .replace("-", "")
+            .replace(" ", "")
+        )
+        return divider_chars == ""
+
+    @classmethod
+    def _normalize_markdown_table(cls, value: Any) -> Optional[str]:
+        """표 markdown이면 정규화된 본문만 반환한다."""
+        text = cls._normalize_str(value)
+        if text is None or not cls._looks_like_markdown_table(text):
+            return None
+        return text
+
+    @classmethod
     def _extract_source_block_ids(cls, payload: Dict[str, Any]) -> List[str]:
         """source block provenance를 표준 source_block_ids 형태로 정규화한다."""
         value = cls._pick_first(payload, cls.SOURCE_BLOCK_IDS_KEYS)
@@ -351,6 +403,45 @@ class AssemblyAdapterCommon:
         }
 
     @classmethod
+    def _merge_unique_ids(cls, *values: Any) -> List[str]:
+        """여러 id 목록을 순서를 유지하면서 합친다."""
+        merged: Dict[str, None] = {}
+
+        for value in values:
+            for item in cls._coerce_list(value):
+                candidate = cls._normalize_ref_id(item)
+                if candidate is not None:
+                    merged[candidate] = None
+
+        return list(merged.keys())
+
+    @classmethod
+    def _bbox_iou(cls, left: Optional[BBox], right: Optional[BBox]) -> Optional[float]:
+        """두 bbox의 IoU를 계산한다."""
+        if left is None or right is None:
+            return None
+
+        left_x1, left_y1, left_x2, left_y2 = left
+        right_x1, right_y1, right_x2, right_y2 = right
+
+        inter_x1 = max(left_x1, right_x1)
+        inter_y1 = max(left_y1, right_y1)
+        inter_x2 = min(left_x2, right_x2)
+        inter_y2 = min(left_y2, right_y2)
+
+        if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
+            return 0.0
+
+        intersection = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+        left_area = max(0.0, (left_x2 - left_x1) * (left_y2 - left_y1))
+        right_area = max(0.0, (right_x2 - right_x1) * (right_y2 - right_y1))
+        union = left_area + right_area - intersection
+        if union <= 0:
+            return 0.0
+
+        return intersection / union
+
+    @classmethod
     def _has_layout_shape(cls, raw: Any) -> bool:
         if isinstance(raw, dict):
             return (
@@ -363,9 +454,13 @@ class AssemblyAdapterCommon:
 
     @classmethod
     def _has_table_shape(cls, raw: Any) -> bool:
+        if cls._looks_like_markdown_table(raw):
+            return True
+
         if isinstance(raw, dict):
             return (
                 cls._pick_first(raw, cls.TABLE_LIST_KEYS) is not None
+                or cls._pick_first(raw, cls.TABLE_MARKDOWN_KEYS) is not None
                 or cls._looks_like_table_entry(raw)
             )
 
@@ -383,7 +478,10 @@ class AssemblyAdapterCommon:
         if not isinstance(raw, (list, tuple)) or not raw:
             return False
 
-        return any(cls._looks_like_table_entry(item) for item in raw)
+        return any(
+            cls._looks_like_table_entry(item) or cls._looks_like_markdown_table(item)
+            for item in raw
+        )
 
     @classmethod
     def _looks_like_element_entry(cls, raw: Any) -> bool:
@@ -407,8 +505,15 @@ class AssemblyAdapterCommon:
         if isinstance(raw, TableRef):
             return True
 
+        if cls._looks_like_markdown_table(raw):
+            return True
+
         if not isinstance(raw, dict):
             return False
+
+        markdown_candidate = cls._pick_first(raw, cls.TABLE_MARKDOWN_KEYS)
+        if cls._looks_like_markdown_table(markdown_candidate):
+            return True
 
         return any(
             key in raw
