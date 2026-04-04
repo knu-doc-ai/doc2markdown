@@ -108,6 +108,49 @@ class TableAdapterContractTests(unittest.TestCase):
         self.assertIn("table_missing_id", warning_codes)
         self.assertIn("table_missing_page", warning_codes)
 
+    def test_table_adapter_converts_plain_markdown_string_into_seed_ref(self):
+        # plain markdown 문자열을 table seed ref로 바꾸고 markdown 본문을 metadata에 보존하는지 검증한다.
+        raw = load_fixture("markdown_table_seed")["table_markdown"]
+
+        result = from_table_output(raw)
+        warning_codes = [warning.code for warning in result.warnings]
+
+        self.assertEqual(result.metadata.stage, "adapter_seed")
+        self.assertEqual(result.metadata.adapter, "table")
+        self.assertEqual(result.metadata.source, "raw")
+        self.assertEqual(len(result.document.table_refs), 1)
+
+        table_ref = result.document.table_refs[0]
+        self.assertEqual(table_ref.table_id, "table_1")
+        self.assertEqual(table_ref.page, 1)
+        self.assertEqual(table_ref.metadata["content_format"], "markdown")
+        self.assertIn("| 카테고리 | 기능 ID |", table_ref.metadata["markdown"])
+        self.assertIn("table_missing_id", warning_codes)
+        self.assertIn("table_missing_page", warning_codes)
+
+    def test_table_adapter_accepts_mixed_raw_and_markdown_entries_in_one_list(self):
+        # 기존 raw table entry와 markdown 문자열이 한 리스트에 섞여 와도 둘 다 seed ref로 변환하는지 검증한다.
+        raw = [
+            {
+                "table_id": "table_raw_1",
+                "page": 3,
+                "bbox": [10, 20, 200, 120],
+                "rows": 2,
+                "columns": 2,
+            },
+            load_fixture("markdown_table_seed")["table_markdown"],
+        ]
+
+        result = from_table_output(raw)
+
+        self.assertEqual(result.metadata.source, "direct_list")
+        self.assertEqual(len(result.document.table_refs), 2)
+        self.assertEqual(result.document.table_refs[0].table_id, "table_raw_1")
+        self.assertEqual(result.document.table_refs[0].page, 3)
+        self.assertEqual(result.document.table_refs[1].table_id, "table_2")
+        self.assertEqual(result.document.table_refs[1].metadata["content_format"], "markdown")
+        self.assertIn("| 기본 연산 | FUNC-001 |", result.document.table_refs[1].metadata["markdown"])
+
 
 class AssemblyServiceContractTests(unittest.TestCase):
     def test_document_assembler_merges_layout_and_table_outputs(self):
@@ -130,6 +173,30 @@ class AssemblyServiceContractTests(unittest.TestCase):
         serialized = result.to_dict()
         self.assertEqual(serialized["document"]["table_refs"][0]["table_id"], "table_1")
         self.assertEqual(serialized["metadata"]["adapter"], "merged")
+
+    def test_document_assembler_build_from_outputs_links_markdown_table_to_layout_ref(self):
+        # build_from_outputs가 layout output과 plain markdown table output을 받아 같은 table ref로 연결하는지 검증한다.
+        fixture = load_fixture("layout_markdown_link")
+
+        result = DocumentAssembler().build_from_outputs(
+            fixture["layout_output"],
+            fixture["table_markdown"],
+        )
+
+        self.assertEqual(result.metadata.stage, "adapter_seed")
+        self.assertEqual(result.metadata.adapter, "merged")
+        self.assertEqual(len(result.ordered_elements), 3)
+        self.assertEqual([element.id for element in result.ordered_elements], ["p1_heading_5", "p1_table_7", "p1_text_8"])
+        self.assertEqual(len(result.document.table_refs), 1)
+
+        table_ref = result.document.table_refs[0]
+        self.assertEqual(table_ref.table_id, "p1_table_7")
+        self.assertEqual(table_ref.page, 1)
+        self.assertEqual(table_ref.bbox, (120.0, 150.0, 880.0, 500.0))
+        self.assertEqual(table_ref.metadata["content_format"], "markdown")
+        self.assertEqual(table_ref.metadata["crop_path"], "data/output\\sample_layout.pdf\\crops\\p1_table_7.png")
+        self.assertEqual(table_ref.metadata["link_strategy"], "document_order")
+        self.assertIn("| 카테고리 | 기능 ID |", table_ref.metadata["markdown"])
 
 
 if __name__ == "__main__":
