@@ -101,10 +101,12 @@ def test_vision_pipeline(file_path):
 
 
 if __name__ == "__main__":
-    SAMPLE_PATH = "data/raw/calculator_srs_final.pdf" 
+    SAMPLE_PATH_LIST = ["data/raw/calculator_srs_final.pdf",
+                        "data/raw/aiReadable.pdf"]
     
-    if os.path.exists(SAMPLE_PATH):
-        test_vision_pipeline(SAMPLE_PATH)
-    else:
-        print(f"🚨 파일을 찾을 수 없습니다: {SAMPLE_PATH}")
+    for sample_path in SAMPLE_PATH_LIST:
+        if os.path.exists(sample_path):
+            test_vision_pipeline(sample_path)
+        else:
+            print(f"🚨 파일을 찾을 수 없습니다: {sample_path}")
         print("data/raw/ 폴더에 테스트할 파일을 넣어주세요.")

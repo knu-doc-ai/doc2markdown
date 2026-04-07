@@ -98,70 +98,78 @@ class VisionEngine:
     
     def _postprocess_elements(self, elements: List[Dict]) -> List[Dict]:
         """
-        [세션 B: 후처리 필터]
-        겹치는 박스 중 우선순위와 신뢰도에 따라 유효한 박스만 남깁니다.
+        [후처리 필터] 가짜 그림(HWP 테두리) 제거 + 우선순위 NMS
         """
-        to_remove = set()
+        # 🛡️ 1. HWP 공문서 종특 방어 (가짜 그림 필터)
+        fake_picture_indices = set()
         
-        # 라벨별 우선순위 가중치 (표와 그림을 최우선으로 보호)
+        for i, el_i in enumerate(elements):
+            # 대상이 그림이나 피규어일 때
+            if el_i["type"] in ["Picture", "Figure"]:
+                contain_count = 0
+                box_i = el_i["bbox"]
+                
+                # 다른 모든 요소들과 비교해서 내 뱃속에 몇 개나 들어있는지 카운트
+                for j, el_j in enumerate(elements):
+                    if i == j: continue
+                    box_j = el_j["bbox"]
+                    inter_area = self._get_intersection_area(box_i, box_j)
+                    area_j = self._get_box_area(box_j)
+                    
+                    # 다른 요소가 이 '그림' 안에 80% 이상 쏙 들어가 있다면
+                    if area_j > 0 and (inter_area / area_j) > 0.80:
+                        contain_count += 1
+                
+                # 💡 핵심: 뱃속에 요소가 4개 이상 있다? -> 이건 그림이 아니라 레이아웃 테두리다! 사형!
+                if contain_count >= 4:
+                    fake_picture_indices.add(i)
+                    
+        # 가짜 그림을 걸러낸 깨끗한 리스트로 필터링 시작
+        filtered_elements = [el for i, el in enumerate(elements) if i not in fake_picture_indices]
+
+        # ⚔️ 2. NMS 중복 제거 (기존 로직 동일)
+        to_remove = set()
         priority = {
-            "Table": 3,
-             
-            "Picture": 2, 
-            "Figure": 2, 
-            "Formula": 2, 
-            
-            "Section-header": 1, 
-            "Text": 1, 
-            "List-item": 1, 
-            "Caption": 1,
-            "Page-header": 1, 
-            "Page-footer": 1
+            "Table": 3, "Picture": 2, "Figure": 2, "Formula": 2, "Text": 2,
+            "Section-header": 1, "List-item": 1, "Caption": 1,
+            "Page-header": 1, "Page-footer": 1
         }
 
-        for i in range(len(elements)):
+        for i in range(len(filtered_elements)):
             if i in to_remove:
                 continue
-            for j in range(i + 1, len(elements)):
+            for j in range(i + 1, len(filtered_elements)):
                 if j in to_remove:
                     continue
 
-                box1, box2 = elements[i]["bbox"], elements[j]["bbox"]
+                box1, box2 = filtered_elements[i]["bbox"], filtered_elements[j]["bbox"]
                 inter_area = self._get_intersection_area(box1, box2)
-                
-                # 겹치는 영역이 없으면 패스
                 if inter_area == 0:
                     continue
                 
                 area1, area2 = self._get_box_area(box1), self._get_box_area(box2)
                 min_area = min(area1, area2)
                 
-                # 두 박스 중 더 작은 박스 면적의 70% 이상이 겹친다면 (포함 관계라면)
                 if (inter_area / min_area) > 0.70:
-                    type1, type2 = elements[i]["type"], elements[j]["type"]
+                    type1, type2 = filtered_elements[i]["type"], filtered_elements[j]["type"]
                     p1, p2 = priority.get(type1, 0), priority.get(type2, 0)
                     
-                    # 1순위: 우선순위가 높은 라벨 승리
                     if p1 > p2:
                         to_remove.add(j)
                     elif p2 > p1:
                         to_remove.add(i)
-                        break # i가 죽었으므로 j와의 추가 비교 중단
+                        break
                     else:
-                        # 2순위: 라벨 우선순위가 같다면 신뢰도(Confidence) 높은 놈 승리
-                        if elements[i]["confidence"] >= elements[j]["confidence"]:
+                        if filtered_elements[i]["confidence"] >= filtered_elements[j]["confidence"]:
                             to_remove.add(j)
                         else:
                             to_remove.add(i)
                             break
 
-        # 살아남은 객체들 추출
-        valid_elements = [el for idx, el in enumerate(elements) if idx not in to_remove]
-        
-        # ⭐ 단순 Y좌표 정렬 대신, 다단 읽기 순서 알고리즘 적용
+        # 살아남은 객체들 추출 및 다단 읽기 순서 정렬
+        valid_elements = [el for idx, el in enumerate(filtered_elements) if idx not in to_remove]
         valid_elements = self._sort_reading_order(valid_elements)
         
-        # ID 예쁘게 재부여
         for idx, el in enumerate(valid_elements):
             el["id"] = idx + 1
             
