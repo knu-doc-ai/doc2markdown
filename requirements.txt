@@ -14,7 +14,11 @@ unstructured>=0.12.5
 
 # 3. 이미지 처리 및 컴퓨터 비전 (Vision AI)
 Pillow>=10.2.0
-opencv-python==4.9.0.80   # 에러 났던 부분! 정확한 버전으로 수정 완료
+ultralytics>=8.1.0
+huggingface_hub>=0.20.0  # 모델 다운로드용
+dill>=0.3.7
+opencv-python==4.9.0.80
+timm>=0.9.0
 
 # 4. 데이터 조작 및 표(Table) 처리
 pandas>=2.2.1
