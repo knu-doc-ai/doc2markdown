@@ -1,7 +1,7 @@
 import os
 import json
-
 import sys
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.modules.text_extractor import TextExtractor
 
@@ -15,8 +15,9 @@ def test_text_extraction(pdf_path, json_path):
         metadata = json.load(f)
 
     # 3. 텍스트 추출기 가동!
-    extractor = TextExtractor(pdf_path)
-    enriched_metadata = extractor.extract_text(metadata)
+    # 🌟 수정 포인트: 초기화 시점이 아니라, 실행 시점에 pdf_path를 넘깁니다!
+    extractor = TextExtractor()
+    enriched_metadata = extractor.extract_text(metadata, pdf_path)
 
     # 4. 결과 저장 (텍스트가 추가된 최종 완성본)
     output_path = json_path.replace("metadata.json", "metadata_with_text.json")
@@ -31,8 +32,10 @@ def test_text_extraction(pdf_path, json_path):
         print(f"[{el['id']}] {el['type']}: {el.get('text', '')[:50]}...")
 
 if __name__ == "__main__":
-    SAMPLE_PATH_LIST = [("data/raw/calculator_srs_final.pdf", "data/output/calculator_srs_final.pdf/metadata.json"),
-                        ("data/raw/aiReadable.pdf", "data/output/aiReadable.pdf/metadata.json")]
+    SAMPLE_PATH_LIST = [
+        ("data/raw/calculator_srs_final.pdf", "data/output/calculator_srs_final.pdf/metadata.json"),
+        ("data/raw/aiReadable.pdf", "data/output/aiReadable.pdf/metadata.json")
+    ]
     
     for pdf_path, json_path in SAMPLE_PATH_LIST:
         test_text_extraction(pdf_path, json_path)
