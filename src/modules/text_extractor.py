@@ -127,7 +127,8 @@ class TextExtractor:
                         # 해상도 2배 뻥튀기
                         crop_upscaled = cv2.resize(crop_padded, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_LINEAR)
                         
-                        cleaned_text = self._extract_with_varco(crop_upscaled)
+                        raw_text = self._extract_with_varco(crop_upscaled)
+                        cleaned_text = self._clean_text(raw_text)
                         if cleaned_text:
                             ocr_count += 1
                     else:
