@@ -1,6 +1,5 @@
 import os
 import re
-import json
 import cv2
 import fitz  # PyMuPDF
 import torch
@@ -17,20 +16,12 @@ logging.getLogger("transformers").setLevel(logging.ERROR)
 class TextExtractor:
     """
     [하이브리드 텍스트 추출 엔진]
-    1. 디지털 PDF: PyMuPDF(fitz)로 100% 정확도와 고속 추출 (1차 스캔)
-    2. 스캔본 PDF: 추출된 텍스트가 없으면 VARCO 모델을 활용한 정밀 OCR 수행 (2차 폴백)
+    Pipeline 초기화 단계(__init__)에서 무거운 VARCO 모델을 한 번만 로드하고,
+    extract_text 호출 시 PDF 파일을 열어 작업을 수행하는 Stateless 구조입니다.
     """
-    def __init__(self, pdf_path: str):
-        self.pdf_path = pdf_path
-        if not os.path.exists(pdf_path):
-            raise FileNotFoundError(f"🚨 PDF 파일을 찾을 수 없습니다: {pdf_path}")
-        
-        # 1. PDF 문서 로드
-        self.doc = fitz.open(pdf_path)
-        print(f"📖 [TextExtractor] '{os.path.basename(pdf_path)}' 로드 완료 (총 {len(self.doc)}페이지)")
-
-        # 2. VARCO OCR 모델 로드 (조원 코드 이식)
-        print("🤖 [TextExtractor] VARCO-VISION OCR 모델 로드 중 (스캔본 대비용)...")
+    def __init__(self):
+        # 1. VARCO OCR 모델 로드 (생성 시 1회만 수행)
+        print("🤖 [TextExtractor] VARCO-VISION OCR 모델 로드 중...")
         self.VARCO_MODEL_ID = "NCSOFT/VARCO-VISION-2.0-1.7B-OCR"
         self.varco_processor = AutoProcessor.from_pretrained(self.VARCO_MODEL_ID)
         self.varco_model = LlavaOnevisionForConditionalGeneration.from_pretrained(
@@ -84,12 +75,21 @@ class TextExtractor:
             
         return cleaned_text
 
-    def extract_text(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
-        print("🔍 [TextExtractor] 하이브리드(PyMuPDF + VARCO OCR) 텍스트 추출 시작...")
+    def extract_text(self, metadata: Dict[str, Any], file_path: str) -> Dict[str, Any]:
+        """
+        전달받은 file_path로 PDF를 열고, metadata의 BBox 좌표를 기반으로 텍스트를 추출합니다.
+        """
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"🚨 PDF 파일을 찾을 수 없습니다: {file_path}")
+            
+        print(f"🔍 [TextExtractor] '{os.path.basename(file_path)}' 텍스트 추출 시작...")
+        
+        # 2. 텍스트 추출 시점에 PDF 열기 (작업 끝나면 메모리 해제 가능)
+        doc = fitz.open(file_path)
         
         for page_data in metadata["pages"]:
             page_num = page_data["page_num"]
-            pdf_page = self.doc[page_num - 1] 
+            pdf_page = doc[page_num - 1] 
             
             # 스케일링 비율 계산용 변수
             pdf_rect = pdf_page.rect
@@ -155,6 +155,7 @@ class TextExtractor:
                 print(f"   🧹 {page_num}페이지: 누락된 텍스트 {len(missed_elements)}개 복구 및 재정렬 완료")
             print(f"   - {page_num}페이지: 추출 완료 (디지털 텍스트 {fitz_count}개 / OCR 텍스트 {ocr_count}개)")
             
+        doc.close()
         return metadata
     
     def _sweep_missed_texts(self, pdf_page, yolo_elements, scale_x, scale_y):
