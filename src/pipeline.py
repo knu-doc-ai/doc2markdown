@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional
 # (아직 해당 파일들에 코드가 없어도 구조상 이렇게 import 합니다)
 from modules.ingestion import FilePreProcessor
 from modules.vision_engine import LayoutAnalyzer
+from modules.text_extractor import TextExtractor
 from modules.llm_core import ContentEnricher
 from modules.assembler import DocumentAssembler
 from modules.renderer import MarkdownRenderer
@@ -14,15 +15,17 @@ class DocumentToMarkdownPipeline:
 
     1. Input Layer: 문서 전처리
     2. Visual Analysis Engine: 레이아웃 분석
-    3. Enrichment Layer: Assembly 입력 형식으로 정규화
-    4. Document Assembly: 문서 구조 IR 조립
-    5. Markdown Rendering: 최종 Markdown 생성
+    3. Text Extraction: BBox 기반 텍스트 정밀 추출 (PyMuPDF + VARCO OCR)
+    4. Enrichment Layer: Assembly 입력 형식으로 정규화
+    5. Document Assembly: 문서 구조 IR 조립
+    6. Markdown Rendering: 최종 Markdown 생성
     """
 
     def __init__(
         self,
         preprocessor: Optional[Any] = FilePreProcessor(),
         vision_engine: Optional[Any] = LayoutAnalyzer(),
+        text_extractor: Optional[Any] = TextExtractor(),
         content_enricher: Optional[Any] = ContentEnricher(),
         assembler: Optional[Any] = DocumentAssembler(),
         renderer: Optional[Any] = MarkdownRenderer(),
@@ -33,6 +36,9 @@ class DocumentToMarkdownPipeline:
         # 2. Visual Analysis Engine (시각 구조 분석)
         self.vision_engine = vision_engine
 
+        # 2.5 Text Extraction (텍스트 추출)
+        self.text_extractor = text_extractor
+        
         # 3. Enrichment Layer (Assembly 입력 형식 정규화)
         self.content_enricher = content_enricher
 
@@ -68,6 +74,13 @@ class DocumentToMarkdownPipeline:
         layout_elements = self.vision_engine.analyze(raw_pages)
 
         # =========================================================
+        # 단계 2.5: Text Extraction (텍스트 추출 및 이삭줍기)
+        # =========================================================
+        print("▶ [Step 2.5] BBox 기반 텍스트 추출 중...")
+        # 🌟 파이프라인 실행 시점에 받은 file_path를 넘겨줌
+        extracted_elements = self.text_extractor.extract_text(layout_elements, file_path)
+
+        # =========================================================
         # 단계 3: Enrichment Layer (Assembly 입력 형식 정규화)
         # =========================================================
         print("▶ [Step 3] Assembly 입력 형식 정규화 중...")
@@ -88,6 +101,7 @@ class DocumentToMarkdownPipeline:
             "status": "success",
             "ingestion_result": raw_pages,
             "layout_result": layout_elements,
+            "extracted_result": extracted_elements,
             "enrichment_result": enrichment_result,
             "assembly_result": self._serialize(assembly_result),
         }
