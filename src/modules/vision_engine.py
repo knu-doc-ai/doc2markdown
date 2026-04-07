@@ -40,6 +40,62 @@ class VisionEngine:
         """Bounding Box의 넓이를 계산합니다."""
         return (box[2] - box[0]) * (box[3] - box[1])
     
+    def _sort_reading_order(self, elements: List[Dict]) -> List[Dict]:
+        """
+        중앙선 교차(Midline Spanning)를 이용한 다단 읽기 순서 정렬
+        """
+        if not elements:
+            return []
+        
+        # 1. 페이지의 X축 정중앙(Midline) 계산
+        x_coords = [el["bbox"][0] for el in elements] + [el["bbox"][2] for el in elements]
+        midline = (min(x_coords) + max(x_coords)) / 2
+        
+        # 2. 우선 Y좌표 기준으로 전체 1차 정렬 (위에서 아래로 훑기 위함)
+        elements = sorted(elements, key=lambda x: x["bbox"][1])
+        
+        blocks = []
+        current_block = {"left": [], "right": [], "full": []}
+        
+        for el in elements:
+            xmin, ymin, xmax, ymax = el["bbox"]
+            
+            # 💡 핵심 로직: 박스의 시작점은 중앙선 왼쪽이고, 끝점은 오른쪽이라면? -> 선을 걸쳤다! (통짜/중앙정렬)
+            if xmin < midline and xmax > midline:
+                # 기존에 읽던 좌/우 단락이 있다면 블록을 마감하고 저장
+                if current_block["left"] or current_block["right"]:
+                    blocks.append(current_block)
+                    current_block = {"left": [], "right": [], "full": []}
+                
+                # 통짜 요소(제목, 큰 표 등)는 단독 블록으로 바로 저장
+                current_block["full"].append(el)
+                blocks.append(current_block)
+                current_block = {"left": [], "right": [], "full": []}
+                
+            # 중앙선 왼쪽에만 쏙 들어가 있다면 -> 좌측 단
+            elif xmax <= midline:
+                current_block["left"].append(el)
+                
+            # 중앙선 오른쪽에만 쏙 들어가 있다면 -> 우측 단
+            else:
+                current_block["right"].append(el)
+                
+        # 마지막으로 남은 찌꺼기 블록 털어내기
+        if current_block["left"] or current_block["right"] or current_block["full"]:
+            blocks.append(current_block)
+            
+        # 3. 인간의 읽기 순서대로 최종 조립 (블록 순서대로 -> 좌측 위아래 다 읽고 -> 우측 위아래)
+        final_sorted = []
+        for block in blocks:
+            if block["full"]:
+                final_sorted.extend(sorted(block["full"], key=lambda x: x["bbox"][1]))
+            if block["left"]:
+                final_sorted.extend(sorted(block["left"], key=lambda x: x["bbox"][1]))
+            if block["right"]:
+                final_sorted.extend(sorted(block["right"], key=lambda x: x["bbox"][1]))
+                
+        return final_sorted
+    
     def _postprocess_elements(self, elements: List[Dict]) -> List[Dict]:
         """
         [세션 B: 후처리 필터]
@@ -49,15 +105,18 @@ class VisionEngine:
         
         # 라벨별 우선순위 가중치 (표와 그림을 최우선으로 보호)
         priority = {
-            "Table": 5, 
-            "Picture": 4, 
-            "Figure": 4, 
-            "Formula": 3, 
-            "Section-header": 2, 
+            "Table": 3,
+             
+            "Picture": 2, 
+            "Figure": 2, 
+            "Formula": 2, 
+            
+            "Section-header": 1, 
             "Text": 1, 
             "List-item": 1, 
-            "Page-header": 0, 
-            "Page-footer": 0
+            "Caption": 1,
+            "Page-header": 1, 
+            "Page-footer": 1
         }
 
         for i in range(len(elements)):
@@ -96,69 +155,71 @@ class VisionEngine:
                             to_remove.add(i)
                             break
 
-        # 살아남은 객체들만 모아서 Y좌표 순서대로 최종 정렬
+        # 살아남은 객체들 추출
         valid_elements = [el for idx, el in enumerate(elements) if idx not in to_remove]
-        valid_elements = sorted(valid_elements, key=lambda x: (x["bbox"][1], x["bbox"][0]))
         
+        # ⭐ 단순 Y좌표 정렬 대신, 다단 읽기 순서 알고리즘 적용
+        valid_elements = self._sort_reading_order(valid_elements)
+        
+        # ID 예쁘게 재부여
         for idx, el in enumerate(valid_elements):
             el["id"] = idx + 1
             
         return valid_elements
     
-    def process_document(self, ingestion_data: Dict) -> Dict[str, Any]:
+    def process_document(self, ingestion_data: Dict[str, Any]) -> Dict[str, Any]:
         file_name = ingestion_data["file_name"]
         doc_output_dir = os.path.join(self.output_base_dir, file_name)
         crop_dir = os.path.join(doc_output_dir, "crops")
         os.makedirs(crop_dir, exist_ok=True)
 
-        print(f"👁️ [Vision] '{file_name}' 시각 분석 및 객체 추출 시작...")
+        # ⭐ 멀티 스케일 (640 & 960) 앙상블 모드
+        print(f"👁️ [Vision] '{file_name}' 분석 시작 (Multi-Scale 앙상블 모드)...")
 
         for page in ingestion_data["pages"]:
             img_path = page["image_path"]
-            results = self.model(img_path, conf=0.25, iou=0.45, imgsz=640)[0]
-            
             raw_elements = []
             
-            # YOLO 탐지 결과 순회
-            for i, box in enumerate(results.boxes):
-                # 좌표 및 클래스 정보 추출
-                coords = box.xyxy[0].tolist() # [xmin, ymin, xmax, ymax]
-                cls_id = int(box.cls[0])
-                label = results.names[cls_id]
-                conf = float(box.conf[0])
-
-                element = {
-                    "type": label,
-                    "bbox": coords,
-                    "confidence": conf,
-                    "crop_path": None
-                }
-
-                # 'Table'이나 'Picture'등은 따로 잘라서 저장
-                if label in ["Table", "Picture", "Figure", "Formula"]:
-                    crop_name = f"p{page['page_num']}_{label.lower()}_{i+1}.png"
-                    save_path = os.path.join(crop_dir, crop_name)
-                    
-                    with Image.open(img_path) as full_img:
-                        cropped_img = full_img.crop(coords)
-                        cropped_img.save(save_path)
-                    
-                    element["crop_path"] = save_path
+            # 1. 두 가지 해상도로 각각 스캔하여 박스 긁어모으기
+            for size in [640, 960]:
+                results = self.model(img_path, conf=0.25, iou=0.45, imgsz=size)[0]
                 
-                raw_elements.append(element)
-
-                # 2. 후처리 필터 적용 (중복 제거 및 정렬)
-            cleaned_elements = self._postprocess_elements(raw_elements)
-            page["elements"] = cleaned_elements
+                for box in results.boxes:
+                    coords = box.xyxy[0].tolist()
+                    cls_id = int(box.cls[0])
+                    label = results.names[cls_id]
+                    conf = float(box.conf[0])
+                    
+                    raw_elements.append({
+                        "type": label,
+                        "bbox": coords,
+                        "confidence": conf,
+                        "crop_path": None # 크롭은 생존자만 나중에!
+                    })
             
-            print(f"   - {page['page_num']}페이지: 탐지 {len(raw_elements)}개 -> 정제 후 {len(cleaned_elements)}개 요소 확보")
+            # 2. 후처리 필터(NMS)로 640과 960의 겹치는 박스 제거 (똑똑한 놈만 생존)
+            cleaned_elements = self._postprocess_elements(raw_elements)
+            
+            # 3. 생존한 객체들만 모아서 최종 이미지 크롭 진행 (디스크 I/O 최적화)
+            with Image.open(img_path) as full_img:
+                for el in cleaned_elements:
+                    if el["type"] in ["Table", "Picture", "Figure", "Formula"]:
+                        crop_name = f"p{page['page_num']}_{el['type'].lower()}_{el['id']}.png"
+                        save_path = os.path.join(crop_dir, crop_name)
+                        
+                        cropped_img = full_img.crop(el["bbox"])
+                        cropped_img.save(save_path)
+                        el["crop_path"] = save_path
+
+            page["elements"] = cleaned_elements
+            print(f"   - {page['page_num']}페이지: 스캔 {len(raw_elements)}개 -> 최종 생존 {len(cleaned_elements)}개")
 
         # 메타데이터 저장
         meta_path = os.path.join(doc_output_dir, "metadata.json")
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(ingestion_data, f, ensure_ascii=False, indent=4)
             
-        print(f"✅ [Vision] 분석 완료! 결과물 저장: {meta_path}")
+        print(f"✅ [Vision] 멀티 스케일 앙상블 분석 완료! 결과물 저장: {meta_path}")
         return ingestion_data
 
 class LayoutAnalyzer(VisionEngine):
