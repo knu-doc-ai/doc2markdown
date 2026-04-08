@@ -1,23 +1,21 @@
 from __future__ import annotations
 
-"""Assembly 입력 어댑터가 공유하는 상수와 정규화 유틸."""
+"""Assembly 입력 어댑터가 공유하는 adapter 전용 상수와 유틸."""
 
-import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
+from modules.assembly._common import AssemblyCommonMixin
 from modules.assembly.ir import AssemblyElement, AssemblyMeta, PageStats, TableRef
 from modules.assembly.types import (
     AssemblyAdapterType,
-    AssemblyElementKind,
     AssemblySourceType,
     AssemblyStage,
     AssemblyWarningCode,
-    BBox,
 )
 
 
-class AssemblyAdapterCommon:
-    """layout/table 어댑터가 공통으로 쓰는 기반 클래스."""
+class AssemblyAdapterCommon(AssemblyCommonMixin):
+    """layout/table 어댑터가 공통으로 쓰는 adapter 전용 기반 클래스."""
 
     # 복합 payload 안에서 layout 결과를 찾을 때 먼저 보는 최상위 키 후보
     LAYOUT_CONTAINER_KEYS: Tuple[str, ...] = (
@@ -135,8 +133,6 @@ class AssemblyAdapterCommon:
         "file_type",
         "total_pages",
     )
-    # note/caption 참조 객체 내부의 id 필드 후보
-    REF_ID_KEYS: Tuple[str, ...] = ("id", "note_id", "caption_id", "uuid")
     # upstream id가 없을 때 사용하는 내부 임시 ID prefix
     ELEMENT_FALLBACK_PREFIX: str = "element"
     TABLE_FALLBACK_PREFIX: str = "table"
@@ -145,38 +141,6 @@ class AssemblyAdapterCommon:
     WARNING_LAYOUT_MISSING_PAGE: AssemblyWarningCode = "layout_missing_page"
     WARNING_TABLE_MISSING_ID: AssemblyWarningCode = "table_missing_id"
     WARNING_TABLE_MISSING_PAGE: AssemblyWarningCode = "table_missing_page"
-    # 다양한 label/type 값을 AssemblyElementKind로 정규화하기 위한 매핑
-    KIND_ALIASES: Dict[str, AssemblyElementKind] = {
-        "text": "text",
-        "paragraph": "text",
-        "body": "text",
-        "heading": "heading",
-        "title": "heading",
-        "section_header": "heading",
-        "list_item": "list_item",
-        "list": "list_item",
-        "bullet": "list_item",
-        "table": "table",
-        "figure": "figure",
-        "picture": "figure",
-        "image": "figure",
-        "caption": "caption",
-        "note": "note",
-        "footnote": "note",
-        "formula": "formula",
-        "equation": "formula",
-        "quote": "quote",
-        "blockquote": "quote",
-        "code": "code_block",
-        "code_block": "code_block",
-        "header": "header",
-        "page_header": "header",
-        "footer": "footer",
-        "page_footer": "footer",
-        "page_number": "page_number",
-        "noise": "noise",
-        "artifact": "noise",
-    }
 
     @classmethod
     def _build_adapter_metadata(
@@ -225,13 +189,6 @@ class AssemblyAdapterCommon:
         )
 
     @classmethod
-    def _pick_first(cls, payload: Dict[str, Any], keys: Tuple[str, ...]) -> Any:
-        for key in keys:
-            if key in payload and payload[key] is not None:
-                return payload[key]
-        return None
-
-    @classmethod
     def _make_element_fallback_id(cls, index: int) -> str:
         """페이지 정보가 없을 때 사용하는 element 임시 ID 규칙."""
         return f"{cls.ELEMENT_FALLBACK_PREFIX}_{index}"
@@ -247,202 +204,14 @@ class AssemblyAdapterCommon:
         return f"{cls.TABLE_FALLBACK_PREFIX}_{index}"
 
     @classmethod
-    def _coerce_list(cls, value: Any) -> List[Any]:
-        if value is None:
-            return []
-        if isinstance(value, list):
-            return value
-        if isinstance(value, tuple):
-            return list(value)
-        return [value]
-
-    @classmethod
-    def _normalize_text(cls, value: Any) -> Optional[str]:
-        if value is None:
-            return None
-
-        text = str(value).strip()
-        if not text:
-            return None
-
-        return re.sub(r"\s+", " ", text)
-
-    @classmethod
-    def _normalize_kind(cls, value: str) -> AssemblyElementKind:
-        normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
-        return cls.KIND_ALIASES.get(normalized, "text")
-
-    @classmethod
-    def _normalize_bbox(cls, value: Any) -> Optional[BBox]:
-        if value is None:
-            return None
-
-        if isinstance(value, dict):
-            if {"x1", "y1", "x2", "y2"}.issubset(value.keys()):
-                coords = [value["x1"], value["y1"], value["x2"], value["y2"]]
-            elif {"left", "top", "right", "bottom"}.issubset(value.keys()):
-                coords = [value["left"], value["top"], value["right"], value["bottom"]]
-            elif {"x", "y", "width", "height"}.issubset(value.keys()):
-                x = cls._normalize_float(value["x"])
-                y = cls._normalize_float(value["y"])
-                width = cls._normalize_float(value["width"])
-                height = cls._normalize_float(value["height"])
-                if None in (x, y, width, height):
-                    return None
-                coords = [x, y, x + width, y + height]
-            else:
-                return None
-        elif isinstance(value, (list, tuple)) and len(value) == 4:
-            coords = list(value)
-        else:
-            return None
-
-        normalized = [cls._normalize_float(item) for item in coords]
-        if any(item is None for item in normalized):
-            return None
-
-        return (
-            normalized[0],
-            normalized[1],
-            normalized[2],
-            normalized[3],
-        )
-
-    @classmethod
-    def _normalize_float(cls, value: Any) -> Optional[float]:
-        if value is None or value == "":
-            return None
-
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-
-    @classmethod
-    def _normalize_int(cls, value: Any, default: Optional[int] = None) -> Optional[int]:
-        if value is None or value == "":
-            return default
-
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return default
-
-    @classmethod
-    def _normalize_str(cls, value: Any) -> Optional[str]:
-        if value is None:
-            return None
-
-        text = str(value).strip()
-        return text or None
-
-    @classmethod
-    def _normalize_id_list(cls, value: Any) -> List[str]:
-        items = cls._coerce_list(value)
-        normalized: List[str] = []
-
-        for item in items:
-            candidate = cls._normalize_ref_id(item)
-            if candidate is not None:
-                normalized.append(candidate)
-
-        return normalized
-
-    @classmethod
-    def _normalize_ref_id(cls, value: Any) -> Optional[str]:
-        if isinstance(value, dict):
-            return cls._normalize_str(cls._pick_first(value, cls.REF_ID_KEYS))
-
-        return cls._normalize_str(value)
-
-    @classmethod
-    def _looks_like_markdown_table(cls, value: Any) -> bool:
-        """문자열이 markdown table 본문인지 느슨하게 판별한다."""
-        text = cls._normalize_str(value)
-        if text is None:
-            return False
-
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-        if len(lines) < 2:
-            return False
-
-        header_line = lines[0]
-        divider_line = lines[1]
-        if "|" not in header_line or "|" not in divider_line:
-            return False
-
-        divider_chars = (
-            divider_line
-            .replace("|", "")
-            .replace(":", "")
-            .replace("-", "")
-            .replace(" ", "")
-        )
-        return divider_chars == ""
-
-    @classmethod
-    def _normalize_markdown_table(cls, value: Any) -> Optional[str]:
-        """표 markdown이면 정규화된 본문만 반환한다."""
-        text = cls._normalize_str(value)
-        if text is None or not cls._looks_like_markdown_table(text):
-            return None
-        return text
-
-    @classmethod
     def _extract_source_block_ids(cls, payload: Dict[str, Any]) -> List[str]:
         """source block provenance를 표준 source_block_ids 형태로 정규화한다."""
         value = cls._pick_first(payload, cls.SOURCE_BLOCK_IDS_KEYS)
         return cls._normalize_id_list(value)
 
     @classmethod
-    def _extract_metadata(cls, payload: Dict[str, Any], known_keys: set[str]) -> Dict[str, Any]:
-        return {
-            key: value
-            for key, value in payload.items()
-            if key not in known_keys and value is not None
-        }
-
-    @classmethod
-    def _merge_unique_ids(cls, *values: Any) -> List[str]:
-        """여러 id 목록을 순서를 유지하면서 합친다."""
-        merged: Dict[str, None] = {}
-
-        for value in values:
-            for item in cls._coerce_list(value):
-                candidate = cls._normalize_ref_id(item)
-                if candidate is not None:
-                    merged[candidate] = None
-
-        return list(merged.keys())
-
-    @classmethod
-    def _bbox_iou(cls, left: Optional[BBox], right: Optional[BBox]) -> Optional[float]:
-        """두 bbox의 IoU를 계산한다."""
-        if left is None or right is None:
-            return None
-
-        left_x1, left_y1, left_x2, left_y2 = left
-        right_x1, right_y1, right_x2, right_y2 = right
-
-        inter_x1 = max(left_x1, right_x1)
-        inter_y1 = max(left_y1, right_y1)
-        inter_x2 = min(left_x2, right_x2)
-        inter_y2 = min(left_y2, right_y2)
-
-        if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
-            return 0.0
-
-        intersection = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
-        left_area = max(0.0, (left_x2 - left_x1) * (left_y2 - left_y1))
-        right_area = max(0.0, (right_x2 - right_x1) * (right_y2 - right_y1))
-        union = left_area + right_area - intersection
-        if union <= 0:
-            return 0.0
-
-        return intersection / union
-
-    @classmethod
     def _has_layout_shape(cls, raw: Any) -> bool:
+        """입력이 layout payload처럼 생겼는지 판별한다."""
         if isinstance(raw, dict):
             return (
                 cls._pick_first(raw, cls.PAGE_LIST_KEYS) is not None
@@ -454,6 +223,7 @@ class AssemblyAdapterCommon:
 
     @classmethod
     def _has_table_shape(cls, raw: Any) -> bool:
+        """입력이 table payload처럼 생겼는지 판별한다."""
         if cls._looks_like_markdown_table(raw):
             return True
 
@@ -468,6 +238,7 @@ class AssemblyAdapterCommon:
 
     @classmethod
     def _is_layout_sequence(cls, raw: Any) -> bool:
+        """list/tuple 입력이 layout entry 시퀀스인지 판별한다."""
         if not isinstance(raw, (list, tuple)) or not raw:
             return False
 
@@ -475,6 +246,7 @@ class AssemblyAdapterCommon:
 
     @classmethod
     def _is_table_sequence(cls, raw: Any) -> bool:
+        """list/tuple 입력이 table entry 시퀀스인지 판별한다."""
         if not isinstance(raw, (list, tuple)) or not raw:
             return False
 
@@ -485,6 +257,7 @@ class AssemblyAdapterCommon:
 
     @classmethod
     def _looks_like_element_entry(cls, raw: Any) -> bool:
+        """dict 하나가 layout element처럼 보이는지 판별한다."""
         if isinstance(raw, AssemblyElement):
             return True
 
@@ -502,6 +275,7 @@ class AssemblyAdapterCommon:
 
     @classmethod
     def _looks_like_table_entry(cls, raw: Any) -> bool:
+        """dict 하나가 table entry처럼 보이는지 판별한다."""
         if isinstance(raw, TableRef):
             return True
 
@@ -524,3 +298,6 @@ class AssemblyAdapterCommon:
                 *cls.TABLE_STRUCTURE_KEYS,
             )
         )
+
+
+__all__ = ["AssemblyAdapterCommon"]
