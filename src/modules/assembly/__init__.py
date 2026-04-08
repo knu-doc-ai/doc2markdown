@@ -24,6 +24,7 @@ from modules.assembly.ir import (
     SectionNode,
     TableRef,
 )
+from modules.assembly.normalize_filter import NormalizeFilter
 from modules.assembly.service import DocumentAssembler
 from modules.assembly.types import (
     ASSEMBLED_NODE_FIGURE_REF,
@@ -78,5 +79,6 @@ __all__ = [
     "AssemblyInputAdapter",
     "from_layout_output",
     "from_table_output",
+    "NormalizeFilter",
     "DocumentAssembler",
 ]
