@@ -780,15 +780,18 @@ class StructureAssembler(AssemblyCommonMixin):
         for block in block_ids:
             item_indent = cls._bbox_left(block)
             indent_level = max(0, round((item_indent - base_indent) / indent_unit))
+            list_marker, stripped_text = cls._split_list_marker(block.text)
             items.append(
                 ListGroupItem(
                     block_ids=[block.id],
-                    text=block.text,
+                    text=stripped_text,
                     source_block_ids=[block.id],
                     metadata={
                         "indent": item_indent,
                         "indent_level": indent_level,
                         "ordered": cls._is_ordered_list_item(block.text),
+                        "list_marker": list_marker,
+                        "source_text": block.text,
                     },
                     raw=block.raw,
                 )
@@ -1169,6 +1172,27 @@ class StructureAssembler(AssemblyCommonMixin):
         if normalized is None:
             return False
         return bool(cls.ORDERED_LIST_PATTERN.match(normalized))
+
+    @classmethod
+    def _split_list_marker(cls, text: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+        """list marker와 실제 item 본문을 분리한다."""
+        normalized = cls._normalize_text(text)
+        if normalized is None:
+            return None, None
+
+        ordered_match = cls.ORDERED_LIST_PATTERN.match(normalized)
+        if ordered_match:
+            marker = ordered_match.group(0).strip()
+            stripped_text = normalized[ordered_match.end():].strip()
+            return marker, stripped_text or normalized
+
+        unordered_match = cls.UNORDERED_LIST_PATTERN.match(normalized)
+        if unordered_match:
+            marker = unordered_match.group(0).strip()
+            stripped_text = normalized[unordered_match.end():].strip()
+            return marker, stripped_text or normalized
+
+        return None, normalized
 
     @classmethod
     def _is_list_like_text(cls, text: str) -> bool:
