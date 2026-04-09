@@ -3,6 +3,10 @@ from __future__ import annotations
 """Markdown Renderer 계약과 입력 검증을 담당하는 서비스."""
 
 from collections.abc import Mapping
+import json
+import os
+from pathlib import Path
+import re
 from typing import Any
 
 from modules.assembly.ir import (
@@ -59,6 +63,94 @@ class MarkdownRenderer:
             warnings=warnings,
             stats=stats,
         )
+
+    def save(
+        self,
+        render_result: MarkdownRenderResult,
+        output_dir: str | Path,
+        markdown_file_name: str = "output.md",
+        report_file_name: str = "render_report.json",
+    ) -> dict[str, str]:
+        """렌더링 결과를 문서 output 폴더에 저장한다."""
+        resolved_output_dir = Path(output_dir)
+        resolved_output_dir.mkdir(parents=True, exist_ok=True)
+
+        markdown_path = resolved_output_dir / markdown_file_name
+        report_path = resolved_output_dir / report_file_name
+
+        markdown_text = self._rewrite_markdown_asset_paths(
+            markdown=render_result.markdown,
+            markdown_path=markdown_path,
+        )
+
+        markdown_path.write_text(markdown_text, encoding="utf-8")
+        report_path.write_text(
+            json.dumps(render_result.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        return {
+            "output_dir": str(resolved_output_dir),
+            "markdown_path": str(markdown_path),
+            "report_path": str(report_path),
+        }
+
+    @classmethod
+    def _rewrite_markdown_asset_paths(
+        cls,
+        markdown: str,
+        markdown_path: Path,
+    ) -> str:
+        """Markdown 파일 저장 위치 기준으로 이미지 경로를 상대경로로 다시 쓴다."""
+        if not markdown:
+            return ""
+
+        def replace_image_path(match: re.Match[str]) -> str:
+            alt_text = match.group("alt")
+            original_path = match.group("path")
+            rewritten_path = cls._to_markdown_relative_path(
+                asset_path=original_path,
+                markdown_path=markdown_path,
+            )
+            return f"![{alt_text}]({rewritten_path})"
+
+        return re.sub(
+            r"!\[(?P<alt>[^\]]*)\]\((?P<path>[^)]+)\)",
+            replace_image_path,
+            markdown,
+        )
+
+    @staticmethod
+    def _to_markdown_relative_path(
+        asset_path: str,
+        markdown_path: Path,
+    ) -> str:
+        """저장될 markdown 파일 기준 상대 경로로 asset 경로를 바꾼다."""
+        normalized_asset_path = asset_path.strip().replace("\\", "/")
+        if not normalized_asset_path:
+            return normalized_asset_path
+
+        if re.match(r"^(?:[a-z]+:)?//", normalized_asset_path, re.IGNORECASE):
+            return normalized_asset_path
+
+        asset_path_obj = Path(normalized_asset_path)
+        if asset_path_obj.is_absolute():
+            target_path = asset_path_obj
+        else:
+            target_path = Path.cwd() / asset_path_obj
+            if not target_path.exists():
+                src_relative_target_path = Path.cwd() / "src" / asset_path_obj
+                if src_relative_target_path.exists():
+                    target_path = src_relative_target_path
+
+        markdown_parent = markdown_path.parent.resolve()
+        final_relative_path = Path(
+            os.path.relpath(
+                Path(target_path).resolve(),
+                markdown_parent,
+            )
+        )
+        return final_relative_path.as_posix()
 
     @classmethod
     def _coerce_assembly_result(cls, value: AssemblyResult | dict[str, Any]) -> AssemblyResult:
