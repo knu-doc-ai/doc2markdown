@@ -26,6 +26,7 @@ from modules.assembly.ir import (
 )
 from modules.assembly.normalize_filter import NormalizeFilter
 from modules.assembly.reading_order import ReadingOrderResolver
+from modules.assembly.structure import StructureAssembler
 from modules.assembly.service import DocumentAssembler
 from modules.assembly.types import (
     ASSEMBLED_NODE_FIGURE_REF,
@@ -82,5 +83,6 @@ __all__ = [
     "from_table_output",
     "NormalizeFilter",
     "ReadingOrderResolver",
+    "StructureAssembler",
     "DocumentAssembler",
 ]
