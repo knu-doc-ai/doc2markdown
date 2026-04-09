@@ -154,12 +154,12 @@ class TableAdapterContractTests(unittest.TestCase):
 
 class AssemblyServiceContractTests(unittest.TestCase):
     def test_document_assembler_merges_layout_and_table_outputs(self):
-        # 통합 payload에서 layout/table 출력을 함께 받아 하나의 seed result로 병합하는지 검증한다.
+        # 통합 payload에서 layout/table 출력을 함께 받아 normalize 단계 결과를 반환하는지 검증한다.
         raw = load_fixture("table_caption_note")
 
         result = DocumentAssembler().build(raw)
 
-        self.assertEqual(result.metadata.stage, "adapter_seed")
+        self.assertEqual(result.metadata.stage, "validated")
         self.assertEqual(result.metadata.adapter, "merged")
         self.assertEqual(result.metadata.source, "raw")
         self.assertEqual(len(result.ordered_elements), 4)
@@ -175,7 +175,7 @@ class AssemblyServiceContractTests(unittest.TestCase):
         self.assertEqual(serialized["metadata"]["adapter"], "merged")
 
     def test_document_assembler_build_from_outputs_links_markdown_table_to_layout_ref(self):
-        # build_from_outputs가 layout output과 plain markdown table output을 받아 같은 table ref로 연결하는지 검증한다.
+        # build_from_outputs가 layout output과 plain markdown table output을 받아 normalize 결과를 반환하는지 검증한다.
         fixture = load_fixture("layout_markdown_link")
 
         result = DocumentAssembler().build_from_outputs(
@@ -183,10 +183,10 @@ class AssemblyServiceContractTests(unittest.TestCase):
             fixture["table_markdown"],
         )
 
-        self.assertEqual(result.metadata.stage, "adapter_seed")
+        self.assertEqual(result.metadata.stage, "validated")
         self.assertEqual(result.metadata.adapter, "merged")
-        self.assertEqual(len(result.ordered_elements), 3)
-        self.assertEqual([element.id for element in result.ordered_elements], ["p1_heading_5", "p1_table_7", "p1_text_8"])
+        self.assertEqual(len(result.ordered_elements), 1)
+        self.assertEqual([element.id for element in result.ordered_elements], ["p1_table_7"])
         self.assertEqual(len(result.document.table_refs), 1)
 
         table_ref = result.document.table_refs[0]
