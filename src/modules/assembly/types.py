@@ -43,6 +43,15 @@ AssemblyWarningCode = Literal[
     "layout_missing_page",  # layout element에 page 정보가 없어 기본 page를 가정한 경우
     "table_missing_id",  # table 결과에 원본 table id가 없어 임시 id를 만든 경우
     "table_missing_page",  # table 결과에 page 정보가 없어 기본 page를 가정한 경우
+    "orphan_caption",  # 어떤 object에도 연결되지 않은 caption block을 찾은 경우
+    "orphan_note",  # 어떤 object에도 연결되지 않은 note block을 찾은 경우
+    "orphan_table",  # caption 없이 남은 table ref를 찾은 경우
+    "orphan_figure",  # caption 없이 남은 figure ref를 찾은 경우
+    "empty_section",  # body 없이 heading만 남은 section을 찾은 경우
+    "relation_conflict",  # next/child/caption/note 관계가 서로 충돌하는 경우
+    "structure_orphan_block",  # 구조 트리에 귀속되지 못한 block을 찾은 경우
+    "missing_geometry",  # bbox 같은 기하 정보가 빠진 block/ref를 찾은 경우
+    "low_confidence_chunk",  # 필터링 후에도 남아 있는 저신뢰 chunk를 표시하는 경우
 ]
 
 AssemblyStage = Literal[

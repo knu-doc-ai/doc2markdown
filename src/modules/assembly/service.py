@@ -9,6 +9,7 @@ from modules.assembly.ir import AssemblyResult
 from modules.assembly.normalize_filter import NormalizeFilter
 from modules.assembly.reading_order import ReadingOrderResolver
 from modules.assembly.structure import StructureAssembler
+from modules.assembly.validator import AssemblyValidator
 
 
 class DocumentAssembler:
@@ -16,16 +17,16 @@ class DocumentAssembler:
     Assembly 규칙 엔진의 진입점
 
     현재 단계에서는 어댑터 계층으로 입력 스펙을 고정하고
-    Normalize 단계까지 연결한다.
+    최종적으로 Validator 단계까지 순서대로 연결한다.
     """
 
     def build(self, raw: Any) -> AssemblyResult:
         """
         raw 입력을 adapter seed로 바꾼 뒤
-        Normalize / Filter -> ReadingOrderResolver -> StructureAssembler까지 수행한다.
+        Normalize / Filter -> ReadingOrderResolver -> StructureAssembler -> Validator까지 수행한다.
         """
-        reading_order_result = self.build_reading_order(raw)
-        return StructureAssembler.apply(reading_order_result)
+        structure_result = self.build_structure(raw)
+        return AssemblyValidator.apply(structure_result)
 
     def build_reading_order(self, raw: Any) -> AssemblyResult:
         """
@@ -36,9 +37,17 @@ class DocumentAssembler:
         normalized_result = NormalizeFilter.apply(seed_result)
         return ReadingOrderResolver.apply(normalized_result)
 
+    def build_structure(self, raw: Any) -> AssemblyResult:
+        """
+        raw 입력을 adapter seed로 바꾼 뒤
+        Normalize / Filter -> ReadingOrderResolver -> StructureAssembler까지 수행한다.
+        """
+        reading_order_result = self.build_reading_order(raw)
+        return StructureAssembler.apply(reading_order_result)
+
     def build_from_outputs(self, layout_output: Any, table_output: Any = None) -> AssemblyResult:
         """
-        layout/table 출력을 명시적으로 받아 StructureAssembler 단계까지 수행한다.
+        layout/table 출력을 명시적으로 받아 Validator 단계까지 수행한다.
 
         Layout Analysis와 Table Extraction이 서로 다른 타이밍에 연결될 때
         상위 파이프라인이 raw payload 포맷을 직접 조립하지 않아도 되게 하는 얇은 헬퍼다.
