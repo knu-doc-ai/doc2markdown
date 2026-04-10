@@ -1,15 +1,19 @@
 import json
+import os
+from importlib import import_module
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import torch
+from dotenv import load_dotenv
 
 from modules.ingestion import FilePreProcessor
 from modules.vision_engine import LayoutAnalyzer
 from modules.text_extractor import TextExtractor
-from modules.table_extractor import TableExtractor
 from modules.assembler import DocumentAssembler
 from modules.renderer import MarkdownRenderer
+
+load_dotenv()
 
 
 class DocumentToMarkdownPipeline:
@@ -37,11 +41,12 @@ class DocumentToMarkdownPipeline:
         self.project_root = Path(project_root).resolve() if project_root else Path(__file__).resolve().parents[1]
         self.output_base_dir = self.project_root / "data" / "output"
         self.temp_dir = self.project_root / "data" / "temp"
+        self.table_extraction_mode = os.getenv("TABLE_EXTRACTION_MODE", "direct").strip().lower()
 
         self.preprocessor = preprocessor or FilePreProcessor(temp_dir=str(self.temp_dir))
         self.vision_engine = vision_engine or LayoutAnalyzer(output_base_dir=str(self.output_base_dir))
         self.text_extractor = text_extractor or TextExtractor()
-        self.table_extractor = table_extractor or TableExtractor()
+        self.table_extractor = table_extractor or self._create_table_extractor()
         self.assembler = assembler or DocumentAssembler()
         self.renderer = renderer or MarkdownRenderer()
 
@@ -60,11 +65,17 @@ class DocumentToMarkdownPipeline:
         self._release_vision_gpu_memory()
 
         print("▶ [Step 3] 텍스트 추출 중...")
-        extracted_result = self.text_extractor.extract_text(layout_result, str(resolved_file_path))
+        try:
+            extracted_result = self.text_extractor.extract_text(layout_result, str(resolved_file_path))
+        finally:
+            if not self._uses_direct_table_extraction() and hasattr(self.text_extractor, "release_model"):
+                self.text_extractor.release_model()
         self._save_json(output_dir / "metadata.json", extracted_result)
 
         print("▶ [Step 4] 표 Markdown 변환 중...")
         table_result = self._build_table_results(extracted_result)
+        if self._uses_direct_table_extraction() and hasattr(self.text_extractor, "release_model"):
+            self.text_extractor.release_model()
         self._save_json(output_dir / "table_results.json", table_result)
 
         print("▶ [Step 5] 문서 조립 중...")
@@ -159,6 +170,21 @@ class DocumentToMarkdownPipeline:
         output_dir = self.output_base_dir / file_path.stem
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir
+
+    def _create_table_extractor(self):
+        """환경변수에 따라 표 추출 실행 방식을 고른다."""
+        if self._uses_direct_table_extraction():
+            print("[Pipeline] TABLE_EXTRACTION_MODE=direct")
+            table_module = import_module("modules.Table_to_markdown")
+            return table_module.TableExtractor()
+
+        print("[Pipeline] TABLE_EXTRACTION_MODE=worker")
+        table_module = import_module("modules.table_extractor")
+        return table_module.TableExtractor()
+
+    def _uses_direct_table_extraction(self) -> bool:
+        """표 추출을 현재 프로세스에서 직접 실행할지 여부를 반환한다."""
+        return self.table_extraction_mode == "direct"
 
     def _save_json(self, path: Path, payload: Any) -> None:
         """UTF-8 JSON 파일로 저장한다."""
