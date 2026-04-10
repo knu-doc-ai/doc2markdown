@@ -6,9 +6,9 @@ import torch
 import numpy as np
 from PIL import Image
 from typing import Dict, Any
-from transformers import AutoProcessor, LlavaOnevisionForConditionalGeneration
 import warnings
 import logging
+from modules.shared_ocr import get_shared_varco_components
 
 warnings.filterwarnings("ignore")
 logging.getLogger("transformers").setLevel(logging.ERROR)
@@ -20,18 +20,8 @@ class TextExtractor:
     extract_text 호출 시 PDF 파일을 열어 작업을 수행하는 Stateless 구조입니다.
     """
     def __init__(self):
-        # 1. VARCO OCR 모델 로드 (생성 시 1회만 수행)
-        print("🤖 [TextExtractor] VARCO-VISION OCR 모델 로드 중...")
-        self.VARCO_MODEL_ID = "NCSOFT/VARCO-VISION-2.0-1.7B-OCR"
-        self.varco_processor = AutoProcessor.from_pretrained(self.VARCO_MODEL_ID)
-        self.varco_model = LlavaOnevisionForConditionalGeneration.from_pretrained(
-            self.VARCO_MODEL_ID, 
-            torch_dtype=torch.float16, 
-            attn_implementation="sdpa", 
-            device_map="auto"
-        )
-        self.varco_model.eval()
-        print("✅ [TextExtractor] VARCO 모델 로드 완료!\n")
+        # 파이프라인 전체에서 같은 VARCO 인스턴스를 재사용한다.
+        self.varco_processor, self.varco_model = get_shared_varco_components()
 
     def _clean_text(self, text: str) -> str:
         """추출된 텍스트의 불필요한 줄바꿈이나 공백을 정리합니다."""
@@ -82,7 +72,7 @@ class TextExtractor:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"🚨 PDF 파일을 찾을 수 없습니다: {file_path}")
             
-        print(f"🔍 [TextExtractor] '{os.path.basename(file_path)}' 텍스트 추출 시작...")
+        print(f"[TextExtractor] '{os.path.basename(file_path)}' 텍스트 추출 시작...")
         
         # 2. 텍스트 추출 시점에 PDF 열기 (작업 끝나면 메모리 해제 가능)
         doc = fitz.open(file_path)
@@ -153,7 +143,7 @@ class TextExtractor:
                 for idx, el in enumerate(page_data["elements"]):
                     el["id"] = idx + 1
                     
-                print(f"   🧹 {page_num}페이지: 누락된 텍스트 {len(missed_elements)}개 복구 및 재정렬 완료")
+                print(f"   {page_num}페이지: 누락된 텍스트 {len(missed_elements)}개 복구 및 재정렬 완료")
             print(f"   - {page_num}페이지: 추출 완료 (디지털 텍스트 {fitz_count}개 / OCR 텍스트 {ocr_count}개)")
             
         doc.close()
@@ -198,7 +188,7 @@ class TextExtractor:
             
             # 어떤 YOLO BBox와도 겹치지 않은 텍스트 블록 발견 시
             if is_missed:
-                print(f"   🚨 [이삭줍기] 비전 모델이 놓친 텍스트 발견: '{text[:20]}...'")
+                print(f"   [이삭줍기] 비전 모델이 놓친 텍스트 발견: '{text[:20]}...'")
                 missed_elements.append({
                     "type": "Text", # 놓친 건 Text로 간주
                     "bbox": [bx1 / scale_x, by1 / scale_y, bx2 / scale_x, by2 / scale_y], # 다시 픽셀 좌표로 원복

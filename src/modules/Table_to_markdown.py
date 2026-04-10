@@ -1,25 +1,24 @@
 import os
+import json
+import sys
 import cv2
 import re
 import torch
 import numpy as np
 from PIL import Image, ImageOps
-from transformers import AutoProcessor, LlavaOnevisionForConditionalGeneration
 from transformers import TableTransformerForObjectDetection, DetrImageProcessor
 import easyocr
 import warnings
 import logging
+from modules.shared_ocr import (
+    get_shared_varco_components,
+)
 
 warnings.filterwarnings("ignore")
 logging.getLogger("transformers").setLevel(logging.ERROR)
 
-print("=== AI 모델 로드 중 (VARCO, TATR, EasyOCR) ===")
-VARCO_MODEL_ID = "NCSOFT/VARCO-VISION-2.0-1.7B-OCR"
-varco_model = LlavaOnevisionForConditionalGeneration.from_pretrained(
-    VARCO_MODEL_ID, torch_dtype=torch.float16, attn_implementation="sdpa", device_map="auto"
-)
-varco_processor = AutoProcessor.from_pretrained(VARCO_MODEL_ID)
-varco_model.eval()
+print("=== AI 모델 로드 중 (공유 VARCO, TATR, EasyOCR) ===")
+varco_processor, varco_model = get_shared_varco_components()
 
 TATR_MODEL_ID = "microsoft/table-transformer-structure-recognition"
 tatr_processor = DetrImageProcessor.from_pretrained(TATR_MODEL_ID)
@@ -29,6 +28,36 @@ if torch.cuda.is_available(): tatr_model = tatr_model.to("cuda")
 
 reader = easyocr.Reader(['ko', 'en'], gpu=torch.cuda.is_available())
 print("AI 모델 로드 완료\n")
+
+
+class TableExtractor:
+    """표 crop 이미지를 Markdown 표로 변환하는 추출기."""
+
+    def extract_table(self, image_path):
+        """단일 표 이미지를 Markdown 문자열로 변환한다."""
+        return process_table_hybrid(image_path)
+
+
+def _run_varco_generation(image: Image.Image) -> str:
+    """VARCO 추론과 결과 정제를 수행한다."""
+    conversation = [{"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": "<ocr>"}]}]
+    inputs = varco_processor.apply_chat_template(
+        conversation, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt"
+    ).to(varco_model.device, torch.float16)
+
+    with torch.no_grad():
+        generate_ids = varco_model.generate(
+            **inputs,
+            max_new_tokens=1024,
+            pad_token_id=varco_processor.tokenizer.eos_token_id
+        )
+
+    raw_output = varco_processor.decode(generate_ids[0][len(inputs.input_ids[0]):], skip_special_tokens=False)
+    cleaned_text = re.sub(r'<bbox>.*?</bbox>', '', raw_output).replace('<char>', '').replace('</char>', '').replace('<|im_end|>', '').replace('</s>', '').strip()
+
+    # LaTeX 수학 기호를 일반 텍스트로 치환
+    cleaned_text = cleaned_text.replace('\\times', '×').replace('\\div', '÷').replace('\\pm', '±').replace('\\cdot', '·')
+    return cleaned_text
 
 # 빈 칸(여백) 판별기
 def is_blank_cell(cell_img_cv):
@@ -43,20 +72,7 @@ def is_blank_cell(cell_img_cv):
 
 def extract_text_with_varco(cell_img_cv):
     image = Image.fromarray(cv2.cvtColor(cell_img_cv, cv2.COLOR_BGR2RGB))
-    conversation = [{"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": "<ocr>"}]}]
-    inputs = varco_processor.apply_chat_template(
-        conversation, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt"
-    ).to(varco_model.device, torch.float16)
-
-    with torch.no_grad():
-        generate_ids = varco_model.generate(**inputs, max_new_tokens=1024, pad_token_id=varco_processor.tokenizer.eos_token_id)
-    
-    raw_output = varco_processor.decode(generate_ids[0][len(inputs.input_ids[0]):], skip_special_tokens=False)
-    cleaned_text = re.sub(r'<bbox>.*?</bbox>', '', raw_output).replace('<char>', '').replace('</char>', '').replace('<|im_end|>', '').replace('</s>', '').strip()
-    
-    #  LaTeX 수학 기호를 일반 텍스트로 치환
-    cleaned_text = cleaned_text.replace('\\times', '×').replace('\\div', '÷').replace('\\pm', '±').replace('\\cdot', '·')
-    return cleaned_text
+    return _run_varco_generation(image)
 
 def get_tatr_rows_cols(image: Image.Image):
     inputs = tatr_processor(images=image, return_tensors="pt")
@@ -101,16 +117,20 @@ def process_table_hybrid(image_path):
     padded_img_pil = ImageOps.expand(orig_img, border=PADDING, fill='white')
     img_cv_padded = cv2.copyMakeBorder(img_cv, PADDING, PADDING, PADDING, PADDING, cv2.BORDER_CONSTANT, value=[255, 255, 255])
     
-    print("TATR: 표 구조 분석")
+    print("1. TATR: 표 구조 분석")
     rows, cols = get_tatr_rows_cols(padded_img_pil)
     if not rows or not cols: return "표 구조를 찾지 못했습니다."
         
-    print("EasyOCR: 텍스트 레이더 스캔")
+    print("2. EasyOCR: 텍스트 레이더 스캔")
     ocr_results = reader.readtext(img_cv_padded)
     text_boxes = []
     for bbox, _, _ in ocr_results:
         xs, ys = [pt[0] for pt in bbox], [pt[1] for pt in bbox]
         text_boxes.append((int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))))
+
+    # 표 구조 분석 단계에서 사용한 GPU 메모리를 셀 OCR 전에 비워둔다.
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     
     print("3. 교차 검증: 병합 셀 매핑")
     num_rows, num_cols = len(rows), len(cols)
@@ -205,7 +225,32 @@ def process_table_hybrid(image_path):
 
     return "\n".join(md_lines)
 
+
+def _run_cli_extraction(image_path: str, result_path: str) -> int:
+    """별도 프로세스 실행용 표 추출 진입점."""
+    try:
+        markdown = process_table_hybrid(image_path)
+        payload = {
+            "status": "success",
+            "markdown": markdown,
+        }
+        exit_code = 0
+    except Exception as error:
+        payload = {
+            "status": "error",
+            "error": str(error),
+        }
+        exit_code = 1
+
+    with open(result_path, "w", encoding="utf-8") as file:
+        json.dump(payload, file, ensure_ascii=False, indent=2)
+
+    return exit_code
+
 if __name__ == "__main__":
+    if len(sys.argv) >= 4 and sys.argv[1] == "--extract":
+        sys.exit(_run_cli_extraction(sys.argv[2], sys.argv[3]))
+
     target_image = "example_sheets_7.png"  
     import time
     start = time.time()

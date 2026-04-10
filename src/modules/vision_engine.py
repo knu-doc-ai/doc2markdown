@@ -11,7 +11,7 @@ class VisionEngine:
     def __init__(self, output_base_dir: str = "data/output"):
         self.output_base_dir = output_base_dir
         # 문서 전용 YOLOv8 가중치 다운로드 및 로드
-        print("🚀 [Vision] 문서 레이아웃 전용 YOLO 모델 로드 중...")
+        print("[Vision] 문서 레이아웃 전용 YOLO 모델 로드 중...")
         
         try:
             # hantian 개발자의 YOLOv8x 기반 DocLayNet 가중치 다운로드
@@ -20,9 +20,9 @@ class VisionEngine:
                 filename="yolov8x-doclaynet-epoch64-imgsz640-initiallr1e-4-finallr1e-5.pt"
             )
             self.model = YOLO(model_path)
-            print("✅ [Vision] YOLOv8x 모델 로드 완료!")
+            print("[Vision] YOLOv8x 모델 로드 완료!")
         except Exception as e:
-            print(f"🚨 [Vision] 모델 로드 실패: {e}")
+            print(f"[Vision] 모델 로드 실패: {e}")
             raise
     
     def _get_intersection_area(self, box1: List[float], box2: List[float]) -> float:
@@ -177,12 +177,13 @@ class VisionEngine:
     
     def process_document(self, ingestion_data: Dict[str, Any]) -> Dict[str, Any]:
         file_name = ingestion_data["file_name"]
-        doc_output_dir = os.path.join(self.output_base_dir, file_name)
+        file_stem = os.path.splitext(file_name)[0]
+        doc_output_dir = os.path.join(self.output_base_dir, file_stem)
         crop_dir = os.path.join(doc_output_dir, "crops")
         os.makedirs(crop_dir, exist_ok=True)
 
         # ⭐ 멀티 스케일 (640 & 960) 앙상블 모드
-        print(f"👁️ [Vision] '{file_name}' 분석 시작 (Multi-Scale 앙상블 모드)...")
+        print(f"[Vision] '{file_name}' 분석 시작 (Multi-Scale 앙상블 모드)...")
 
         for page in ingestion_data["pages"]:
             img_path = page["image_path"]
@@ -227,7 +228,7 @@ class VisionEngine:
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(ingestion_data, f, ensure_ascii=False, indent=4)
             
-        print(f"✅ [Vision] 멀티 스케일 앙상블 분석 완료! 결과물 저장: {meta_path}")
+        print(f"[Vision] 멀티 스케일 앙상블 분석 완료! 결과물 저장: {meta_path}")
         return ingestion_data
 
 class LayoutAnalyzer(VisionEngine):
