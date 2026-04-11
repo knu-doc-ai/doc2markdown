@@ -14,7 +14,6 @@ if str(SRC_DIR) not in sys.path:
 
 from _assembly_debug_utils import (
     ASSEMBLY_STAGE_OUTPUTS,
-    DEFAULT_READING_ORDER_STRATEGY,
     build_stage_results_from_outputs,
     save_stage_results,
 )
@@ -128,15 +127,6 @@ def main() -> None:
         action="store_true",
         help="Only print stage headers and change summaries.",
     )
-    parser.add_argument(
-        "--strategy",
-        choices=["default", "layout_priority"],
-        default=DEFAULT_READING_ORDER_STRATEGY,
-        help=(
-            "Reading-order strategy to use when rebuilding assembly stages. "
-            f"Defaults to {DEFAULT_READING_ORDER_STRATEGY}."
-        ),
-    )
     args = parser.parse_args()
 
     output_dir = resolve_output_dir(args.output_dir)
@@ -151,11 +141,7 @@ def main() -> None:
     layout_output = load_json(layout_path)
     table_output = load_json(table_path)
 
-    stage_results = build_stage_results_from_outputs(
-        layout_output,
-        table_output,
-        strategy=args.strategy,
-    )
+    stage_results = build_stage_results_from_outputs(layout_output, table_output)
 
     write_dir = (
         Path(args.write_dir).resolve()

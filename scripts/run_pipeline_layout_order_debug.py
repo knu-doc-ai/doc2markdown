@@ -21,7 +21,6 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from _assembly_debug_utils import (
-    DEFAULT_READING_ORDER_STRATEGY,
     build_stage_results_from_outputs,
     save_json,
     save_stage_results,
@@ -41,7 +40,6 @@ class LayoutOrderDebugPipeline:
         table_extractor: Optional[Any] = None,
         renderer: Optional[Any] = None,
         project_root: Optional[str] = None,
-        strategy: str = DEFAULT_READING_ORDER_STRATEGY,
     ):
         try:
             from modules.ingestion import FilePreProcessor
@@ -58,7 +56,6 @@ class LayoutOrderDebugPipeline:
         self.output_base_dir = self.project_root / "data" / "output"
         self.temp_dir = self.project_root / "data" / "temp"
         self.table_extraction_mode = os.getenv("TABLE_EXTRACTION_MODE", "direct").strip().lower()
-        self.strategy = strategy
 
         self.preprocessor = preprocessor or FilePreProcessor(temp_dir=str(self.temp_dir))
         self.vision_engine = vision_engine or LayoutAnalyzer(output_base_dir=str(self.output_base_dir))
@@ -77,7 +74,6 @@ class LayoutOrderDebugPipeline:
         debug_steps_dir = resolved_output_dir / "debug" / "pipeline_steps"
 
         print(f"[DebugPipeline] start: {resolved_file_path}")
-        print(f"[DebugPipeline] strategy: {self.strategy}")
 
         print("[DebugPipeline] Step 1/6 ingestion")
         raw_pages = self.preprocessor.process(str(resolved_file_path))
@@ -107,11 +103,7 @@ class LayoutOrderDebugPipeline:
         save_json(debug_steps_dir / "04_table_results.json", table_result)
 
         print("[DebugPipeline] Step 5/6 assembly")
-        stage_results = build_stage_results_from_outputs(
-            extracted_result,
-            table_result,
-            strategy=self.strategy,
-        )
+        stage_results = build_stage_results_from_outputs(extracted_result, table_result)
         assembly_stage_paths = save_stage_results(
             resolved_output_dir / "debug" / "assembly_stages",
             stage_results,
@@ -121,7 +113,6 @@ class LayoutOrderDebugPipeline:
 
         pipeline_result: Dict[str, Any] = {
             "status": "success",
-            "strategy": self.strategy,
             "file_path": str(resolved_file_path),
             "output_dir": str(resolved_output_dir),
             "debug_step_paths": {
@@ -205,7 +196,7 @@ class LayoutOrderDebugPipeline:
             if not output_dir.is_absolute():
                 output_dir = (self.project_root / output_dir).resolve()
         else:
-            output_dir = self.output_base_dir / f"{file_path.stem}_{self.strategy}"
+            output_dir = self.output_base_dir / file_path.stem
 
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir
@@ -273,7 +264,7 @@ class LayoutOrderDebugPipeline:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Run a script-only document pipeline and save every debug state, prioritizing layout order when desired."
+        description="Run the document pipeline and save debug artifacts for each pipeline and assembly stage."
     )
     parser.add_argument(
         "input_pdf",
@@ -284,16 +275,7 @@ def main() -> None:
     parser.add_argument(
         "--output-dir",
         default=None,
-        help="Directory to save outputs. Defaults to data/output/<stem>_<strategy>.",
-    )
-    parser.add_argument(
-        "--strategy",
-        choices=["default", "layout_priority"],
-        default=DEFAULT_READING_ORDER_STRATEGY,
-        help=(
-            "Reading-order strategy for assembly. "
-            f"Defaults to {DEFAULT_READING_ORDER_STRATEGY}."
-        ),
+        help="Directory to save outputs. Defaults to data/output/<stem>.",
     )
     parser.add_argument(
         "--no-render-markdown",
@@ -310,7 +292,7 @@ def main() -> None:
         raise FileNotFoundError(f"Input PDF not found: {input_pdf}")
 
     try:
-        pipeline = LayoutOrderDebugPipeline(strategy=args.strategy)
+        pipeline = LayoutOrderDebugPipeline()
         pipeline.run(
             file_path=str(input_pdf),
             output_dir=args.output_dir,
