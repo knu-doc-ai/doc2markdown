@@ -6,11 +6,12 @@ import warnings
 from typing import Any, Dict
 
 import cv2
-import fitz
+import fitz  # PyMuPDF
 import numpy as np
 import torch
 from PIL import Image
 from transformers import AutoProcessor, LlavaOnevisionForConditionalGeneration
+
 from modules.shared_ocr import get_shared_varco_components, release_shared_varco_components
 
 warnings.filterwarnings("ignore")
@@ -18,7 +19,11 @@ logging.getLogger("transformers").setLevel(logging.ERROR)
 
 
 class TextExtractor:
-    """PDF 본문 텍스트를 추출하는 모듈."""
+    """
+    [하이브리드 텍스트 추출 엔진]
+    Pipeline 초기화 단계(__init__)에서 무거운 VARCO 모델을 한 번만 로드하고,
+    extract_text 호출 시 PDF 파일을 열어 작업을 수행하는 Stateless 구조입니다.
+    """
 
     def __init__(self):
         self.table_extraction_mode = os.getenv("TABLE_EXTRACTION_MODE", "direct").strip().lower()
@@ -26,11 +31,11 @@ class TextExtractor:
         self.varco_processor, self.varco_model = self._load_varco_components()
 
     def _load_varco_components(self):
-        """텍스트 추출용 VARCO 모델을 직접 로드한다."""
+        """텍스트 추출용 VARCO 모델을 직접 로드합니다."""
         if self.use_shared_varco:
             return get_shared_varco_components()
 
-        print("[TextExtractor] VARCO-VISION OCR 모델 로드 중...")
+        print("🤖 [TextExtractor] VARCO-VISION OCR 모델 로드 중...")
         varco_model_id = "NCSOFT/VARCO-VISION-2.0-1.7B-OCR"
         processor = AutoProcessor.from_pretrained(varco_model_id)
         model = LlavaOnevisionForConditionalGeneration.from_pretrained(
@@ -40,17 +45,17 @@ class TextExtractor:
             device_map="auto",
         )
         model.eval()
-        print("[TextExtractor] VARCO 모델 로드 완료!\n")
+        print("✅ [TextExtractor] VARCO 모델 로드 완료!\n")
         return processor, model
 
     def _clean_text(self, text: str) -> str:
-        """줄바꿈과 과한 공백을 정리한다."""
+        """추출된 텍스트의 불필요한 줄바꿈이나 공백을 정리합니다."""
         if not text:
             return ""
         return " ".join(text.replace("\n", " ").split())
 
     def _is_blank_cell(self, cell_img_cv) -> bool:
-        """빈 이미지처럼 보이는 영역은 OCR에서 제외한다."""
+        """이미지가 실질적으로 비어있는지(여백) 검사하여 환각(Hallucination) 방지"""
         gray = cv2.cvtColor(cell_img_cv, cv2.COLOR_BGR2GRAY)
         h, w = gray.shape
         crop = gray[int(h * 0.1):int(h * 0.9), int(w * 0.1):int(w * 0.9)]
@@ -59,7 +64,7 @@ class TextExtractor:
         return np.std(crop) < 5.0
 
     def _extract_with_varco(self, cell_img_cv) -> str:
-        """VARCO로 이미지 조각의 텍스트를 읽는다."""
+        """VARCO 모델을 이용해 이미지 조각에서 텍스트를 읽어냅니다."""
         if (
             cell_img_cv.size == 0
             or cell_img_cv.shape[0] < 5
@@ -78,6 +83,7 @@ class TextExtractor:
                 ],
             }
         ]
+
         inputs = self.varco_processor.apply_chat_template(
             conversation,
             add_generation_prompt=True,
@@ -97,41 +103,137 @@ class TextExtractor:
             generate_ids[0][len(inputs.input_ids[0]):],
             skip_special_tokens=False,
         )
-        cleaned_text = re.sub(r"<bbox>.*?</bbox>", "", raw_output)
-        cleaned_text = cleaned_text.replace("<char>", "").replace("</char>", "")
-        cleaned_text = cleaned_text.replace("<|im_end|>", "").replace("</s>", "").strip()
-        cleaned_text = cleaned_text.replace("\\times", "횞")
-        cleaned_text = cleaned_text.replace("\\div", "첨")
-        cleaned_text = cleaned_text.replace("\\pm", "짹")
-        cleaned_text = cleaned_text.replace("\\cdot", "쨌")
+        cleaned_text = re.sub(r"<bbox>.*?</bbox>", "", raw_output).replace("<char>", "")
+        cleaned_text = cleaned_text.replace("</char>", "").replace("<|im_end|>", "")
+        cleaned_text = cleaned_text.replace("</s>", "").strip()
+
+        # 수식 기호를 사람이 읽기 쉬운 문자로 치환
+        cleaned_text = cleaned_text.replace("\\times", "×")
+        cleaned_text = cleaned_text.replace("\\div", "÷")
+        cleaned_text = cleaned_text.replace("\\pm", "±")
+        cleaned_text = cleaned_text.replace("\\cdot", "·")
+
         if cleaned_text in ["VARCO VISION", "VARCOVISION", "xxx", "I", ".", "-", "_"]:
             return ""
+
         return cleaned_text
 
-    def extract_text(self, metadata: Dict[str, Any], file_path: str) -> Dict[str, Any]:
-        """레이아웃 결과의 bbox를 기준으로 텍스트를 채운다."""
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"원본 PDF 파일을 찾을 수 없습니다: {file_path}")
+    def _sweep_missed_texts(self, pdf_page, yolo_elements, scale_x, scale_y):
+        """
+        [이삭줍기 함수]
+        YOLO가 놓친 텍스트 블록을 fitz의 좌표를 통해 찾아냅니다.
+        """
+        missed_elements = []
+        fitz_blocks = pdf_page.get_text("blocks")
 
-        print(f"[TextExtractor] '{os.path.basename(file_path)}' 텍스트 추출 시작...")
+        for block in fitz_blocks:
+            bx1, by1, bx2, by2, text = block[:5]
+
+            if block[6] == 1 or not text.strip():
+                continue
+
+            is_missed = True
+
+            for el in yolo_elements:
+                yx1, yy1, yx2, yy2 = el["bbox"]
+                px1, py1, px2, py2 = yx1 * scale_x, yy1 * scale_y, yx2 * scale_x, yy2 * scale_y
+
+                inter_x1 = max(bx1, px1)
+                inter_y1 = max(by1, py1)
+                inter_x2 = min(bx2, px2)
+                inter_y2 = min(by2, py2)
+
+                if inter_x1 < inter_x2 and inter_y1 < inter_y2:
+                    is_missed = False
+                    break
+
+            if is_missed:
+                print(f"   🚨 [이삭줍기] 비전 모델이 놓친 텍스트 발견: '{text[:20]}...'")
+                missed_elements.append(
+                    {
+                        "type": "Text",
+                        "bbox": [bx1 / scale_x, by1 / scale_y, bx2 / scale_x, by2 / scale_y],
+                        "confidence": 1.0,
+                        "text": self._clean_text(text),
+                        "crop_path": None,
+                    }
+                )
+
+        return missed_elements
+
+    def _sort_reading_order(self, elements: list) -> list:
+        """
+        중앙선 교차(Midline Spanning)를 이용한 다단 읽기 순서 정렬 (Vision 엔진과 동일)
+        """
+        if not elements:
+            return []
+
+        x_coords = [el["bbox"][0] for el in elements] + [el["bbox"][2] for el in elements]
+        midline = (min(x_coords) + max(x_coords)) / 2
+
+        elements = sorted(elements, key=lambda x: x["bbox"][1])
+        blocks = []
+        current_block = {"left": [], "right": [], "full": []}
+
+        for el in elements:
+            xmin, ymin, xmax, ymax = el["bbox"]
+
+            if xmin < midline and xmax > midline:
+                if current_block["left"] or current_block["right"]:
+                    blocks.append(current_block)
+                    current_block = {"left": [], "right": [], "full": []}
+                current_block["full"].append(el)
+                blocks.append(current_block)
+                current_block = {"left": [], "right": [], "full": []}
+            elif xmax <= midline:
+                current_block["left"].append(el)
+            else:
+                current_block["right"].append(el)
+
+        if current_block["left"] or current_block["right"] or current_block["full"]:
+            blocks.append(current_block)
+
+        final_sorted = []
+        for block in blocks:
+            if block["full"]:
+                final_sorted.extend(sorted(block["full"], key=lambda x: x["bbox"][1]))
+            if block["left"]:
+                final_sorted.extend(sorted(block["left"], key=lambda x: x["bbox"][1]))
+            if block["right"]:
+                final_sorted.extend(sorted(block["right"], key=lambda x: x["bbox"][1]))
+
+        return final_sorted
+
+    def extract_text(self, metadata: Dict[str, Any], file_path: str) -> Dict[str, Any]:
+        """
+        전달받은 file_path로 PDF를 열고, metadata의 BBox 좌표를 기반으로 텍스트를 추출합니다.
+        """
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"🚨 PDF 파일을 찾을 수 없습니다: {file_path}")
+
+        print(f"🔍 [TextExtractor] '{os.path.basename(file_path)}' 텍스트 추출 시작...")
+
+        # 텍스트 추출 시점에 PDF 열기 (작업 끝나면 메모리 해제 가능)
         doc = fitz.open(file_path)
 
         for page_data in metadata["pages"]:
             page_num = page_data["page_num"]
             pdf_page = doc[page_num - 1]
 
+            # 스케일링 비율 계산용 변수
             pdf_rect = pdf_page.rect
             img_width, img_height = page_data["width"], page_data["height"]
             scale_x = pdf_rect.width / img_width
             scale_y = pdf_rect.height / img_height
 
+            # OCR을 위한 고해상도 전체 이미지 로드 (OpenCV)
             img_path = page_data.get("image_path")
             img_cv = cv2.imread(img_path) if img_path and os.path.exists(img_path) else None
 
             fitz_count = 0
             ocr_count = 0
 
-            for element in page_data.get("elements", []):
+            for el in page_data.get("elements", []):
                 text_types = [
                     "Text",
                     "Section-header",
@@ -143,15 +245,20 @@ class TextExtractor:
                     "Subtitle",
                 ]
 
-                if element["type"] in text_types:
-                    x1, y1, x2, y2 = element["bbox"]
+                if el["type"] in text_types:
+                    x1, y1, x2, y2 = el["bbox"]
+
+                    # [1차 시도]: PyMuPDF (fitz) 로 빠른 추출
                     clip_rect = fitz.Rect(x1 * scale_x, y1 * scale_y, x2 * scale_x, y2 * scale_y)
                     raw_text = pdf_page.get_text("text", clip=clip_rect)
                     cleaned_text = self._clean_text(raw_text)
 
+                    # [2차 폴백]: fitz가 실패했고(스캔본), 이미지가 로드되어 있다면 VARCO OCR 가동
                     if not cleaned_text and img_cv is not None:
                         ix1, iy1, ix2, iy2 = map(int, [x1, y1, x2, y2])
                         crop_img = img_cv[iy1:iy2, ix1:ix2]
+
+                        # 여백 추가 및 해상도 확대
                         pad = 10
                         crop_padded = cv2.copyMakeBorder(
                             crop_img,
@@ -174,33 +281,37 @@ class TextExtractor:
                         cleaned_text = self._clean_text(raw_text)
                         if cleaned_text:
                             ocr_count += 1
-                    elif cleaned_text:
-                        fitz_count += 1
+                    else:
+                        if cleaned_text:
+                            fitz_count += 1
 
-                    element["text"] = cleaned_text
+                    el["text"] = cleaned_text
                 else:
-                    element["text"] = f"[{element['type']} Image]"
+                    el["text"] = f"[{el['type']} Image]"
 
             yolo_elements = page_data.get("elements", [])
             missed_elements = self._sweep_missed_texts(pdf_page, yolo_elements, scale_x, scale_y)
 
             if missed_elements:
+                # 1. 놓친 요소들을 기존 리스트에 합치기
                 page_data["elements"].extend(missed_elements)
-                page_data["elements"] = sorted(page_data["elements"], key=lambda item: item["bbox"][1])
-                for index, element in enumerate(page_data["elements"]):
-                    element["id"] = index + 1
-                print(f"   {page_num}페이지: 누락 텍스트 {len(missed_elements)}개 복구 및 재정렬 완료")
 
-            print(
-                f"   - {page_num}페이지: 추출 완료 "
-                f"(디지털 텍스트 {fitz_count}개 / OCR 텍스트 {ocr_count}개)"
-            )
+                # 2. 단순 Y정렬 대신 다단 레이아웃(Z-Pattern) 정렬 적용
+                page_data["elements"] = self._sort_reading_order(page_data["elements"])
+
+                # 3. ID 번호 재부여
+                for idx, el in enumerate(page_data["elements"]):
+                    el["id"] = idx + 1
+
+                print(f"   🧹 {page_num}페이지: 누락된 텍스트 {len(missed_elements)}개 복구 및 다단 재정렬 완료")
+
+            print(f"   - {page_num}페이지: 추출 완료 (디지털 텍스트 {fitz_count}개 / OCR 텍스트 {ocr_count}개)")
 
         doc.close()
         return metadata
 
     def release_model(self) -> None:
-        """텍스트 추출이 끝난 뒤 VARCO 자원을 해제한다."""
+        """텍스트 추출이 끝난 뒤 VARCO 자원을 해제합니다."""
         if self.varco_model is None and self.varco_processor is None:
             return
 
@@ -215,44 +326,4 @@ class TextExtractor:
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        print("[TextExtractor] VARCO 메모리 해제 완료")
-
-    def _sweep_missed_texts(self, pdf_page, yolo_elements, scale_x, scale_y):
-        """YOLO가 놓친 PDF 텍스트 블록을 보강한다."""
-        missed_elements = []
-        fitz_blocks = pdf_page.get_text("blocks")
-
-        for block in fitz_blocks:
-            bx1, by1, bx2, by2, text = block[:5]
-
-            if block[6] == 1 or not text.strip():
-                continue
-
-            is_missed = True
-            for element in yolo_elements:
-                yx1, yy1, yx2, yy2 = element["bbox"]
-                px1, py1, px2, py2 = yx1 * scale_x, yy1 * scale_y, yx2 * scale_x, yy2 * scale_y
-
-                inter_x1 = max(bx1, px1)
-                inter_y1 = max(by1, py1)
-                inter_x2 = min(bx2, px2)
-                inter_y2 = min(by2, py2)
-
-                if inter_x1 < inter_x2 and inter_y1 < inter_y2:
-                    is_missed = False
-                    break
-
-            if is_missed:
-                preview = self._clean_text(text)[:20]
-                print(f"   [탐색기] 비전 모델이 놓친 텍스트 발견: '{preview}...'")
-                missed_elements.append(
-                    {
-                        "type": "Text",
-                        "bbox": [bx1 / scale_x, by1 / scale_y, bx2 / scale_x, by2 / scale_y],
-                        "confidence": 1.0,
-                        "text": self._clean_text(text),
-                        "crop_path": None,
-                    }
-                )
-
-        return missed_elements
+        print("🧹 [TextExtractor] VARCO 메모리 해제 완료")
