@@ -720,7 +720,25 @@ class MarkdownRenderer:
     @classmethod
     def _normalize_block_text(cls, value: Any) -> str:
         """문단/리스트 텍스트의 불필요한 줄바꿈과 공백을 줄인다."""
-        return cls._normalize_inline_text(value)
+        normalized = cls._normalize_inline_text(value)
+        return cls._escape_leading_markdown_syntax(normalized)
+
+    @staticmethod
+    def _escape_leading_markdown_syntax(text: str) -> str:
+        """본문 text가 Markdown block syntax로 오인되지 않도록 최소 escaping을 적용한다."""
+        if not text:
+            return ""
+
+        if text.startswith("\\"):
+            return text
+
+        if text.startswith(("#", ">")):
+            return f"\\{text}"
+
+        if re.fullmatch(r"(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,}", text):
+            return f"\\{text}"
+
+        return text
 
     @staticmethod
     def _normalize_asset_path(path: str) -> str:
