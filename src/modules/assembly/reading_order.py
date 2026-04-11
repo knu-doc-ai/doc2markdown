@@ -643,32 +643,6 @@ class ReadingOrderResolver(AssemblyCommonMixin):
         return overlap_band_count >= 2
 
     @classmethod
-    def _estimate_column_region_start(
-        cls,
-        entries: List[_PageEntry],
-        page_plan: _PagePlan,
-    ) -> Optional[float]:
-        """실제 다단 본문이 시작되는 대략적인 y 지점을 찾는다."""
-        if page_plan.column_count <= 1:
-            return None
-
-        column_tops: List[float] = []
-        for band in page_plan.bands:
-            stable_entries = [
-                entry
-                for entry in entries
-                if entry.resolved_column_id == band.id
-                and not cls._crosses_column_boundary(entry.element, page_plan)
-            ]
-            if not stable_entries:
-                continue
-            column_tops.append(min(cls._entry_top(entry) for entry in stable_entries))
-
-        if len(column_tops) < 2:
-            return None
-        return min(column_tops)
-
-    @classmethod
     def _crosses_column_boundary(
         cls,
         element: AssemblyElement,
