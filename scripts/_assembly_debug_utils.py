@@ -7,7 +7,6 @@ from typing import Any, Dict
 from modules.assembly.adapters import AssemblyInputAdapter
 from modules.assembly.ir import AssemblyResult
 from modules.assembly.normalize_filter import NormalizeFilter
-from modules.assembly.reading_order import ReadingOrderResolver
 from modules.assembly.structure import StructureAssembler
 from modules.assembly.validator import AssemblyValidator
 
@@ -15,9 +14,8 @@ from modules.assembly.validator import AssemblyValidator
 ASSEMBLY_STAGE_OUTPUTS = [
     ("adapter_seed", "01_adapter_seed.json"),
     ("normalized", "02_normalized.json"),
-    ("reading_order_resolved", "03_reading_order_resolved.json"),
-    ("structure_assembled", "04_structure_assembled.json"),
-    ("validated", "05_validated.json"),
+    ("structure_assembled", "03_structure_assembled.json"),
+    ("validated", "04_validated.json"),
 ]
 
 
@@ -73,14 +71,12 @@ def build_stage_results_from_outputs(
         }
     )
     normalized_result = NormalizeFilter.apply(seed_result)
-    reading_order_result = ReadingOrderResolver.apply(normalized_result)
-    structure_result = StructureAssembler.apply(reading_order_result)
+    structure_result = StructureAssembler.apply(normalized_result)
     validated_result = AssemblyValidator.apply(structure_result)
 
     return {
         "adapter_seed": seed_result,
         "normalized": normalized_result,
-        "reading_order_resolved": reading_order_result,
         "structure_assembled": structure_result,
         "validated": validated_result,
     }

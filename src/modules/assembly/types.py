@@ -57,7 +57,6 @@ AssemblyWarningCode = Literal[
 AssemblyStage = Literal[
     "adapter_seed",  # 업스트림 raw를 내부 IR 초안으로만 정규화한 상태
     "normalized",  # 공백 정리, 필터링, 라벨 정규화 등 전처리가 끝난 상태
-    "reading_order_resolved",  # 페이지/컬럼/라인 기준 읽기 순서가 확정된 상태
     "structure_assembled",  # 문단/리스트/섹션/표 연결 등 구조 조립이 끝난 상태
     "validated",  # orphan/conflict/low-confidence 검증까지 마친 최종 상태
 ]

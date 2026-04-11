@@ -67,9 +67,9 @@ class AssemblyElement(SerializableIR):
     label: Optional[str] = None
     # upstream confidence 전달용
     confidence: Optional[float] = None
-    # reading order 단계에서 계산될 컬럼 번호
+    # upstream 힌트 또는 후속 구조 단계에서 활용할 컬럼 번호
     column_id: Optional[int] = None
-    # 최종 읽기 순서 인덱스
+    # upstream 순서를 기준으로 유지되는 읽기 순서 인덱스
     reading_order: Optional[int] = None
     # 구조 조립 후 부모 블록 또는 section 참조용
     parent_id: Optional[str] = None
@@ -282,8 +282,7 @@ class AssemblyMeta(SerializableIR):
     element_count 같은 보조 정보는 details에 모아둔다.
     """
 
-    # adapter_seed -> normalized -> reading_order_resolved
-    # -> structure_assembled -> validated 순으로 진행된다.
+    # adapter_seed -> normalized -> structure_assembled -> validated 순으로 진행된다.
     stage: Optional[AssemblyStage] = None
     # 현재 결과를 직접 생성한 어댑터 또는 조립 주체
     adapter: Optional[AssemblyAdapterType] = None
@@ -297,7 +296,7 @@ class AssemblyMeta(SerializableIR):
 class AssemblyResult(SerializableIR):
     """Assembly 단계의 표준 반환 객체"""
 
-    # reading order가 반영된 블록 목록
+    # upstream 순서를 보존한 블록 목록
     ordered_elements: List[AssemblyElement] = field(default_factory=list)
     # 블록 간 관계 edge 목록
     block_relations: List[BlockRelation] = field(default_factory=list)

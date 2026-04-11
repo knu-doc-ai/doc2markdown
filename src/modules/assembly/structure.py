@@ -21,7 +21,7 @@ from modules.assembly.ir import (
     SectionNode,
     TableRef,
 )
-from modules.assembly.reading_order import ReadingOrderResolver
+from modules.assembly.normalize_filter import NormalizeFilter
 
 
 class StructureAssembler(AssemblyCommonMixin):
@@ -63,10 +63,11 @@ class StructureAssembler(AssemblyCommonMixin):
         if cls._should_skip_structure(result.metadata.stage):
             return result
 
-        if result.metadata.stage != "reading_order_resolved":
-            result = ReadingOrderResolver.apply(result)
+        if result.metadata.stage != "normalized":
+            result = NormalizeFilter.apply(result)
 
         ordered_elements = cls._ensure_reading_order(result.ordered_elements)
+        next_relations = cls._build_next_relations(ordered_elements)
         page_stats_by_page = {page_stat.page: page_stat for page_stat in result.page_stats}
         element_map = {element.id: element for element in ordered_elements}
 
@@ -329,7 +330,7 @@ class StructureAssembler(AssemblyCommonMixin):
 
         return AssemblyResult(
             ordered_elements=updated_elements,
-            block_relations=list(result.block_relations) + structure_relations,
+            block_relations=cls._merge_next_relations(result.block_relations, next_relations) + structure_relations,
             document=replace(
                 result.document,
                 children=root_children,
@@ -352,17 +353,74 @@ class StructureAssembler(AssemblyCommonMixin):
 
     @classmethod
     def _ensure_reading_order(cls, elements: List[AssemblyElement]) -> List[AssemblyElement]:
-        """reading_order가 있으면 그 순서를 우선 사용한다."""
-        return sorted(
-            elements,
-            key=lambda element: (
-                element.reading_order if element.reading_order is not None else 10**9,
-                element.page,
-                cls._bbox_top(element),
-                cls._bbox_left(element),
-                element.id,
-            ),
-        )
+        """upstream이 정한 순서를 유지하면서 reading_order 필드를 채운다."""
+        if not elements:
+            return []
+
+        if all(element.reading_order is not None for element in elements):
+            ordered_elements = sorted(
+                elements,
+                key=lambda element: (
+                    element.reading_order,
+                    element.page,
+                    cls._bbox_top(element),
+                    cls._bbox_left(element),
+                    element.id,
+                ),
+            )
+        else:
+            ordered_elements = list(elements)
+
+        materialized_elements: List[AssemblyElement] = []
+        for index, element in enumerate(ordered_elements, start=1):
+            if element.reading_order is not None:
+                materialized_elements.append(element)
+                continue
+
+            metadata = dict(element.metadata)
+            metadata["reading_order_source"] = "upstream_sequence"
+            materialized_elements.append(
+                replace(
+                    element,
+                    reading_order=index,
+                    metadata=metadata,
+                )
+            )
+
+        return materialized_elements
+
+    @classmethod
+    def _build_next_relations(cls, ordered_elements: List[AssemblyElement]) -> List[BlockRelation]:
+        next_relations: List[BlockRelation] = []
+        for current, following in zip(ordered_elements, ordered_elements[1:]):
+            next_relations.append(
+                BlockRelation(
+                    type="next",
+                    src=current.id,
+                    dst=following.id,
+                    score=1.0,
+                    metadata={
+                        "page": current.page,
+                        "same_page": current.page == following.page,
+                        "reading_order": (current.reading_order, following.reading_order),
+                    },
+                )
+            )
+        return next_relations
+
+    @classmethod
+    def _merge_next_relations(
+        cls,
+        existing_relations: List[BlockRelation],
+        next_relations: List[BlockRelation],
+    ) -> List[BlockRelation]:
+        merged_relations = [
+            relation
+            for relation in existing_relations
+            if relation.type != "next"
+        ]
+        merged_relations.extend(next_relations)
+        return merged_relations
 
     @classmethod
     def _resolve_object_attachments(
@@ -880,6 +938,26 @@ class StructureAssembler(AssemblyCommonMixin):
         return section.level if section.level is not None else 99
 
     @classmethod
+    def _shares_column_flow(
+        cls,
+        previous: AssemblyElement,
+        current: AssemblyElement,
+        page_stat: Optional[PageStats],
+    ) -> bool:
+        """column_id가 없더라도 bbox 단서로 같은 흐름인지 판단한다."""
+        if previous.column_id is not None and current.column_id is not None:
+            return previous.column_id == current.column_id
+
+        if previous.bbox is None or current.bbox is None:
+            return previous.column_id == current.column_id
+
+        indent_tolerance = max(cls.MIN_INDENT_TOLERANCE, cls._line_height(page_stat))
+        if abs(previous.bbox[0] - current.bbox[0]) <= indent_tolerance:
+            return True
+
+        return cls._horizontal_overlap_ratio(previous.bbox, current.bbox) >= 0.5
+
+    @classmethod
     def _should_merge_paragraph(
         cls,
         previous: AssemblyElement,
@@ -894,7 +972,7 @@ class StructureAssembler(AssemblyCommonMixin):
             return False
         if previous.page != current.page:
             return False
-        if previous.column_id != current.column_id:
+        if not cls._shares_column_flow(previous, current, page_stat):
             return False
         if previous.bbox is None or current.bbox is None:
             return False
@@ -930,6 +1008,8 @@ class StructureAssembler(AssemblyCommonMixin):
         # R-ASM-11
         # 너무 떨어지지 않고 marker 계열이 같으면 같은 list로 유지한다.
         if previous.page != current.page:
+            return False
+        if not cls._shares_column_flow(previous, current, page_stat):
             return False
         if previous.bbox is None or current.bbox is None:
             return False

@@ -137,7 +137,6 @@ class NormalizeFilter(AssemblyCommonMixin):
         """이미 normalize 이후 단계면 다시 처리하지 않는다."""
         return stage in {
             "normalized",
-            "reading_order_resolved",
             "structure_assembled",
             "validated",
         }

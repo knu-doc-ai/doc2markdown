@@ -25,7 +25,6 @@ from modules.assembly.ir import (
     TableRef,
 )
 from modules.assembly.normalize_filter import NormalizeFilter
-from modules.assembly.reading_order import ReadingOrderResolver
 from modules.assembly.structure import StructureAssembler
 from modules.assembly.validator import AssemblyValidator
 from modules.assembly.service import DocumentAssembler
@@ -83,7 +82,6 @@ __all__ = [
     "from_layout_output",
     "from_table_output",
     "NormalizeFilter",
-    "ReadingOrderResolver",
     "StructureAssembler",
     "AssemblyValidator",
     "DocumentAssembler",

@@ -7,7 +7,6 @@ from typing import Any
 from modules.assembly.adapters import AssemblyInputAdapter
 from modules.assembly.ir import AssemblyResult
 from modules.assembly.normalize_filter import NormalizeFilter
-from modules.assembly.reading_order import ReadingOrderResolver
 from modules.assembly.structure import StructureAssembler
 from modules.assembly.validator import AssemblyValidator
 
@@ -23,27 +22,26 @@ class DocumentAssembler:
     def build(self, raw: Any) -> AssemblyResult:
         """
         raw 입력을 adapter seed로 바꾼 뒤
-        Normalize / Filter -> ReadingOrderResolver -> StructureAssembler -> Validator까지 수행한다.
+        Normalize / Filter -> StructureAssembler -> Validator까지 수행한다.
         """
         structure_result = self.build_structure(raw)
         return AssemblyValidator.apply(structure_result)
 
-    def build_reading_order(self, raw: Any) -> AssemblyResult:
+    def build_normalized(self, raw: Any) -> AssemblyResult:
         """
         raw 입력을 adapter seed로 바꾼 뒤
-        Normalize / Filter -> ReadingOrderResolver까지만 수행한다.
+        Normalize / Filter까지만 수행한다.
         """
         seed_result = AssemblyInputAdapter.from_raw(raw)
-        normalized_result = NormalizeFilter.apply(seed_result)
-        return ReadingOrderResolver.apply(normalized_result)
+        return NormalizeFilter.apply(seed_result)
 
     def build_structure(self, raw: Any) -> AssemblyResult:
         """
         raw 입력을 adapter seed로 바꾼 뒤
-        Normalize / Filter -> ReadingOrderResolver -> StructureAssembler까지 수행한다.
+        Normalize / Filter -> StructureAssembler까지 수행한다.
         """
-        reading_order_result = self.build_reading_order(raw)
-        return StructureAssembler.apply(reading_order_result)
+        normalized_result = self.build_normalized(raw)
+        return StructureAssembler.apply(normalized_result)
 
     def build_from_outputs(self, layout_output: Any, table_output: Any = None) -> AssemblyResult:
         """

@@ -223,7 +223,7 @@ class AssemblyServiceContractTests(unittest.TestCase):
         self.assertIn("| 카테고리 | 기능 ID |", table_ref.metadata["markdown"])
 
 
-    def test_document_assembler_keeps_left_column_first_when_top_block_crosses_boundary(self):
+    def test_document_assembler_preserves_upstream_order_when_top_block_crosses_boundary(self):
         raw = {
             "layout_output": {
                 "file_name": "boundary_case.pdf",
@@ -269,23 +269,23 @@ class AssemblyServiceContractTests(unittest.TestCase):
             "table_output": [],
         }
 
-        result = DocumentAssembler().build_reading_order(raw)
+        result = DocumentAssembler().build_structure(raw)
 
         self.assertEqual(
             [element.id for element in result.ordered_elements[:4]],
             ["p1_text_1", "p1_text_2", "p1_heading_13", "p1_text_15"],
         )
         self.assertEqual(
-            [(element.id, element.column_id, element.reading_order) for element in result.ordered_elements[:4]],
+            [(element.id, element.reading_order) for element in result.ordered_elements[:4]],
             [
-                ("p1_text_1", 1, 1),
-                ("p1_text_2", 1, 2),
-                ("p1_heading_13", 2, 3),
-                ("p1_text_15", 2, 4),
+                ("p1_text_1", 1),
+                ("p1_text_2", 2),
+                ("p1_heading_13", 3),
+                ("p1_text_15", 4),
             ],
         )
 
-    def test_document_assembler_uses_gutter_aware_boundary_for_wide_left_block(self):
+    def test_document_assembler_preserves_upstream_order_for_wide_left_block(self):
         raw = {
             "layout_output": {
                 "file_name": "gutter_boundary_case.pdf",
@@ -331,19 +331,19 @@ class AssemblyServiceContractTests(unittest.TestCase):
             "table_output": [],
         }
 
-        result = DocumentAssembler().build_reading_order(raw)
+        result = DocumentAssembler().build_structure(raw)
 
         self.assertEqual(
-            [(element.id, element.column_id, element.reading_order) for element in result.ordered_elements[:4]],
+            [(element.id, element.reading_order) for element in result.ordered_elements[:4]],
             [
-                ("p1_text_1", 1, 1),
-                ("p1_text_2", 1, 2),
-                ("p1_heading_13", 2, 3),
-                ("p1_text_15", 2, 4),
+                ("p1_text_1", 1),
+                ("p1_text_2", 2),
+                ("p1_heading_13", 3),
+                ("p1_text_15", 4),
             ],
         )
 
-    def test_document_assembler_orders_spanning_intro_before_two_columns(self):
+    def test_document_assembler_preserves_upstream_order_for_spanning_intro(self):
         raw = build_layout_payload(
             [
                 {
@@ -385,75 +385,20 @@ class AssemblyServiceContractTests(unittest.TestCase):
             file_name="top_spanning_then_two_columns.pdf",
         )
 
-        result = DocumentAssembler().build_reading_order(raw)
+        result = DocumentAssembler().build_structure(raw)
 
         self.assertEqual(
-            [(element.id, element.column_id, element.reading_order) for element in result.ordered_elements[:5]],
+            [(element.id, element.reading_order) for element in result.ordered_elements[:5]],
             [
-                ("p1_text_1", 0, 1),
-                ("p1_text_2", 1, 2),
-                ("p1_text_3", 1, 3),
-                ("p1_text_4", 2, 4),
-                ("p1_text_5", 2, 5),
+                ("p1_text_1", 1),
+                ("p1_text_2", 2),
+                ("p1_text_3", 3),
+                ("p1_text_4", 4),
+                ("p1_text_5", 5),
             ],
         )
 
-    def test_document_assembler_orders_two_columns_before_spanning_outro(self):
-        raw = build_layout_payload(
-            [
-                {
-                    "id": 1,
-                    "type": "Text",
-                    "bbox": [140.0, 180.0, 1100.0, 430.0],
-                    "confidence": 0.98,
-                    "text": "Left column first block",
-                },
-                {
-                    "id": 2,
-                    "type": "Text",
-                    "bbox": [140.0, 520.0, 1100.0, 770.0],
-                    "confidence": 0.98,
-                    "text": "Left column second block",
-                },
-                {
-                    "id": 3,
-                    "type": "Text",
-                    "bbox": [1700.0, 200.0, 2680.0, 450.0],
-                    "confidence": 0.98,
-                    "text": "Right column first block",
-                },
-                {
-                    "id": 4,
-                    "type": "Text",
-                    "bbox": [1700.0, 560.0, 2680.0, 810.0],
-                    "confidence": 0.98,
-                    "text": "Right column second block",
-                },
-                {
-                    "id": 5,
-                    "type": "Text",
-                    "bbox": [130.0, 1040.0, 2860.0, 1300.0],
-                    "confidence": 0.98,
-                    "text": "Bottom outro spanning block",
-                },
-            ],
-            file_name="two_columns_then_bottom_spanning.pdf",
-        )
-
-        result = DocumentAssembler().build_reading_order(raw)
-
-        self.assertEqual(
-            [(element.id, element.column_id, element.reading_order) for element in result.ordered_elements[:5]],
-            [
-                ("p1_text_1", 1, 1),
-                ("p1_text_2", 1, 2),
-                ("p1_text_3", 2, 3),
-                ("p1_text_4", 2, 4),
-                ("p1_text_5", 0, 5),
-            ],
-        )
-
-    def test_document_assembler_splits_two_column_regions_around_midpage_spanning_block(self):
+    def test_document_assembler_preserves_upstream_order_around_midpage_spanning_block(self):
         raw = build_layout_payload(
             [
                 {
@@ -495,16 +440,16 @@ class AssemblyServiceContractTests(unittest.TestCase):
             file_name="two_columns_spanning_two_columns.pdf",
         )
 
-        result = DocumentAssembler().build_reading_order(raw)
+        result = DocumentAssembler().build_structure(raw)
 
         self.assertEqual(
-            [(element.id, element.column_id, element.reading_order) for element in result.ordered_elements[:5]],
+            [(element.id, element.reading_order) for element in result.ordered_elements[:5]],
             [
-                ("p1_text_1", 1, 1),
-                ("p1_text_2", 2, 2),
-                ("p1_text_3", 0, 3),
-                ("p1_text_4", 1, 4),
-                ("p1_text_5", 2, 5),
+                ("p1_text_1", 1),
+                ("p1_text_2", 2),
+                ("p1_text_3", 3),
+                ("p1_text_4", 4),
+                ("p1_text_5", 5),
             ],
         )
 
