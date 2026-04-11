@@ -199,5 +199,68 @@ class AssemblyServiceContractTests(unittest.TestCase):
         self.assertIn("| 카테고리 | 기능 ID |", table_ref.metadata["markdown"])
 
 
+    def test_document_assembler_keeps_left_column_first_when_top_block_crosses_boundary(self):
+        raw = {
+            "layout_output": {
+                "file_name": "boundary_case.pdf",
+                "total_pages": 1,
+                "pages": [
+                    {
+                        "page_num": 1,
+                        "width": 3509,
+                        "height": 2895,
+                        "elements": [
+                            {
+                                "id": 1,
+                                "type": "Text",
+                                "bbox": [148.68, 148.62, 1524.73, 1094.45],
+                                "confidence": 0.95,
+                                "text": "Left intro block that slightly crosses the inferred boundary.",
+                            },
+                            {
+                                "id": 2,
+                                "type": "Text",
+                                "bbox": [147.62, 1177.04, 907.44, 1475.25],
+                                "confidence": 0.95,
+                                "text": "Left lower block",
+                            },
+                            {
+                                "id": 13,
+                                "type": "Section-header",
+                                "bbox": [1796.69, 149.93, 2126.31, 234.29],
+                                "confidence": 0.95,
+                                "text": "Right heading",
+                            },
+                            {
+                                "id": 15,
+                                "type": "Text",
+                                "bbox": [1801.04, 1917.92, 3331.48, 2190.83],
+                                "confidence": 0.95,
+                                "text": "Right body block",
+                            },
+                        ],
+                    }
+                ],
+            },
+            "table_output": [],
+        }
+
+        result = DocumentAssembler().build_reading_order(raw)
+
+        self.assertEqual(
+            [element.id for element in result.ordered_elements[:4]],
+            ["p1_text_1", "p1_text_2", "p1_heading_13", "p1_text_15"],
+        )
+        self.assertEqual(
+            [(element.id, element.column_id, element.reading_order) for element in result.ordered_elements[:4]],
+            [
+                ("p1_text_1", 1, 1),
+                ("p1_text_2", 1, 2),
+                ("p1_heading_13", 2, 3),
+                ("p1_text_15", 2, 4),
+            ],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

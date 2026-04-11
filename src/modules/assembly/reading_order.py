@@ -509,16 +509,6 @@ class ReadingOrderResolver(AssemblyCommonMixin):
             )
             for index, element in enumerate(page_elements)
         ]
-        column_region_start = cls._estimate_column_region_start(entries, page_plan)
-        if column_region_start is not None:
-            for entry in entries:
-                if (
-                    entry.element.bbox is not None
-                    and cls._entry_top(entry) < column_region_start
-                    and cls._crosses_column_boundary(entry.element, page_plan)
-                ):
-                    entry.resolved_column_id = 0
-
         if page_plan.column_count <= 1:
             return cls._order_region_entries(entries, page_plan, column_ids=[1])
 
