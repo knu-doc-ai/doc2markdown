@@ -117,18 +117,34 @@ def process_table_hybrid(image_path):
     grid = [[{"row_span": 1, "col_span": 1, "bbox": [], "is_master": True, "text": ""} 
              for _ in range(num_cols)] for _ in range(num_rows)]
     
-    for r_idx, r_box in enumerate(rows):
-        for c_idx, c_box in enumerate(cols):
-            grid[r_idx][c_idx]["bbox"] = [c_box[0], r_box[1], c_box[2], r_box[3]]
+    cut_y = [rows[0][1]]
+    for i in range(num_rows - 1):
+        cut_y.append((rows[i][3] + rows[i+1][1]) / 2.0)
+    cut_y.append(rows[-1][3])
+    
+    cut_x = [cols[0][0]]
+    for i in range(num_cols - 1):
+        cut_x.append((cols[i][2] + cols[i+1][0]) / 2.0)
+    cut_x.append(cols[-1][2])
+    
+    for r_idx in range(num_rows):
+        for c_idx in range(num_cols):
+            grid[r_idx][c_idx]["bbox"] = [cut_x[c_idx], cut_y[r_idx], cut_x[c_idx+1], cut_y[r_idx+1]]
 
     for (tx1, ty1, tx2, ty2) in text_boxes:
+        text_w, text_h = tx2 - tx1, ty2 - ty1
+        if text_w < 5 or text_h < 5: continue # 노이즈 무시
+
         covered_rows, covered_cols = [], []
-        for r_idx, r_box in enumerate(rows):
-            overlap_h = max(0, min(ty2, r_box[3]) - max(ty1, r_box[1]))
-            if overlap_h / (ty2 - ty1 + 1e-5) > 0.3: covered_rows.append(r_idx)
-        for c_idx, c_box in enumerate(cols):
-            overlap_w = max(0, min(tx2, c_box[2]) - max(tx1, c_box[0]))
-            if overlap_w / (tx2 - tx1 + 1e-5) > 0.2: covered_cols.append(c_idx)
+
+        # 하드 컷라인 기준으로 겹침 판단
+        for r_idx in range(num_rows):
+            overlap_h = max(0, min(ty2, cut_y[r_idx+1]) - max(ty1, cut_y[r_idx]))
+            if overlap_h / text_h > 0.3: covered_rows.append(r_idx)
+            
+        for c_idx in range(num_cols):
+            overlap_w = max(0, min(tx2, cut_x[c_idx+1]) - max(tx1, cut_x[c_idx]))
+            if overlap_w / text_w > 0.25: covered_cols.append(c_idx) # 임계값을 25%로 살짝 높여 방어력 극대화!
 
         if covered_rows and covered_cols:
             sr, er = min(covered_rows), max(covered_rows)
@@ -139,7 +155,8 @@ def process_table_hybrid(image_path):
                 master = grid[sr][sc]
                 if rs >= master["row_span"] and cs >= master["col_span"]:
                     master["row_span"], master["col_span"] = rs, cs
-                    master["bbox"] = [cols[sc][0], rows[sr][1], cols[ec][2], rows[er][3]]
+                    # 병합된 거대한 박스도 하드 컷라인 기준으로 생성
+                    master["bbox"] = [cut_x[sc], cut_y[sr], cut_x[ec+1], cut_y[er+1]]
                     for r in range(sr, er + 1):
                         for c in range(sc, ec + 1):
                             if r == sr and c == sc: continue
