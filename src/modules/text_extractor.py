@@ -74,6 +74,99 @@ class TextExtractor:
             return ""
             
         return cleaned_text
+    
+    def _sweep_missed_texts(self, pdf_page, yolo_elements, scale_x, scale_y):
+        """
+        [이삭줍기 함수]
+        YOLO가 놓친 텍스트 블록을 fitz의 좌표를 통해 찾아냅니다.
+        """
+        missed_elements = []
+        # fitz가 인식한 페이지 전체의 텍스트 블록들 (좌표 + 텍스트)
+        fitz_blocks = pdf_page.get_text("blocks") 
+        
+        for block in fitz_blocks:
+            # block 구조: (x0, y0, x1, y1, "텍스트내용", block_no, block_type)
+            bx1, by1, bx2, by2, text = block[:5]
+            
+            # 이미지나 빈 칸은 무시
+            if block[6] == 1 or not text.strip(): 
+                continue
+                
+            is_missed = True
+            
+            # YOLO가 잡은 BBox들과 겹치는지 확인
+            for el in yolo_elements:
+                yx1, yy1, yx2, yy2 = el["bbox"]
+                
+                # YOLO 픽셀 좌표를 PDF 포인트 좌표로 변환해서 비교
+                px1, py1, px2, py2 = yx1 * scale_x, yy1 * scale_y, yx2 * scale_x, yy2 * scale_y
+                
+                # 겹치는 영역 계산 (Intersection)
+                inter_x1 = max(bx1, px1)
+                inter_y1 = max(by1, py1)
+                inter_x2 = min(bx2, px2)
+                inter_y2 = min(by2, py2)
+                
+                if inter_x1 < inter_x2 and inter_y1 < inter_y2:
+                    # 조금이라도 겹친다면 YOLO가 (텍스트든 표든 그림이든) 인지한 영역
+                    is_missed = False
+                    break
+            
+            # 어떤 YOLO BBox와도 겹치지 않은 텍스트 블록 발견 시
+            if is_missed:
+                print(f"   🚨 [이삭줍기] 비전 모델이 놓친 텍스트 발견: '{text[:20]}...'")
+                missed_elements.append({
+                    "type": "Text", # 놓친 건 Text로 간주
+                    "bbox": [bx1 / scale_x, by1 / scale_y, bx2 / scale_x, by2 / scale_y], # 다시 픽셀 좌표로 원복
+                    "confidence": 1.0, # PDF 원본 텍스트이므로 신뢰도 100%
+                    "text": self._clean_text(text),
+                    "crop_path": None
+                })
+                
+        return missed_elements
+    
+    def _sort_reading_order(self, elements: list) -> list:
+        """
+        중앙선 교차(Midline Spanning)를 이용한 다단 읽기 순서 정렬 (Vision 엔진과 동일)
+        """
+        if not elements:
+            return []
+        
+        x_coords = [el["bbox"][0] for el in elements] + [el["bbox"][2] for el in elements]
+        midline = (min(x_coords) + max(x_coords)) / 2
+        
+        elements = sorted(elements, key=lambda x: x["bbox"][1])
+        blocks = []
+        current_block = {"left": [], "right": [], "full": []}
+        
+        for el in elements:
+            xmin, ymin, xmax, ymax = el["bbox"]
+            
+            if xmin < midline and xmax > midline:
+                if current_block["left"] or current_block["right"]:
+                    blocks.append(current_block)
+                    current_block = {"left": [], "right": [], "full": []}
+                current_block["full"].append(el)
+                blocks.append(current_block)
+                current_block = {"left": [], "right": [], "full": []}
+            elif xmax <= midline:
+                current_block["left"].append(el)
+            else:
+                current_block["right"].append(el)
+                
+        if current_block["left"] or current_block["right"] or current_block["full"]:
+            blocks.append(current_block)
+            
+        final_sorted = []
+        for block in blocks:
+            if block["full"]:
+                final_sorted.extend(sorted(block["full"], key=lambda x: x["bbox"][1]))
+            if block["left"]:
+                final_sorted.extend(sorted(block["left"], key=lambda x: x["bbox"][1]))
+            if block["right"]:
+                final_sorted.extend(sorted(block["right"], key=lambda x: x["bbox"][1]))
+                
+        return final_sorted
 
     def extract_text(self, metadata: Dict[str, Any], file_path: str) -> Dict[str, Any]:
         """
@@ -146,65 +239,15 @@ class TextExtractor:
                 # 1. 놓친 요소들을 기존 리스트에 합치기
                 page_data["elements"].extend(missed_elements)
                 
-                # 2. 중간에 끼어든 요소가 있으니 Y좌표 기준으로 전체 다시 정렬
-                page_data["elements"] = sorted(page_data["elements"], key=lambda x: x["bbox"][1])
+                # 2.: 단순 Y정렬 대신 다단 레이아웃(Z-Pattern) 정렬 적용
+                page_data["elements"] = self._sort_reading_order(page_data["elements"])
                 
                 # 3. ID 번호 예쁘게 재부여
                 for idx, el in enumerate(page_data["elements"]):
                     el["id"] = idx + 1
                     
-                print(f"   🧹 {page_num}페이지: 누락된 텍스트 {len(missed_elements)}개 복구 및 재정렬 완료")
+                print(f"   🧹 {page_num}페이지: 누락된 텍스트 {len(missed_elements)}개 복구 및 다단 재정렬 완료")
             print(f"   - {page_num}페이지: 추출 완료 (디지털 텍스트 {fitz_count}개 / OCR 텍스트 {ocr_count}개)")
             
         doc.close()
         return metadata
-    
-    def _sweep_missed_texts(self, pdf_page, yolo_elements, scale_x, scale_y):
-        """
-        [이삭줍기 함수]
-        YOLO가 놓친 텍스트 블록을 fitz의 좌표를 통해 찾아냅니다.
-        """
-        missed_elements = []
-        # fitz가 인식한 페이지 전체의 텍스트 블록들 (좌표 + 텍스트)
-        fitz_blocks = pdf_page.get_text("blocks") 
-        
-        for block in fitz_blocks:
-            # block 구조: (x0, y0, x1, y1, "텍스트내용", block_no, block_type)
-            bx1, by1, bx2, by2, text = block[:5]
-            
-            # 이미지나 빈 칸은 무시
-            if block[6] == 1 or not text.strip(): 
-                continue
-                
-            is_missed = True
-            
-            # YOLO가 잡은 BBox들과 겹치는지 확인
-            for el in yolo_elements:
-                yx1, yy1, yx2, yy2 = el["bbox"]
-                
-                # YOLO 픽셀 좌표를 PDF 포인트 좌표로 변환해서 비교
-                px1, py1, px2, py2 = yx1 * scale_x, yy1 * scale_y, yx2 * scale_x, yy2 * scale_y
-                
-                # 겹치는 영역 계산 (Intersection)
-                inter_x1 = max(bx1, px1)
-                inter_y1 = max(by1, py1)
-                inter_x2 = min(bx2, px2)
-                inter_y2 = min(by2, py2)
-                
-                if inter_x1 < inter_x2 and inter_y1 < inter_y2:
-                    # 조금이라도 겹친다면 YOLO가 (텍스트든 표든 그림이든) 인지한 영역
-                    is_missed = False
-                    break
-            
-            # 어떤 YOLO BBox와도 겹치지 않은 텍스트 블록 발견 시
-            if is_missed:
-                print(f"   🚨 [이삭줍기] 비전 모델이 놓친 텍스트 발견: '{text[:20]}...'")
-                missed_elements.append({
-                    "type": "Text", # 놓친 건 Text로 간주
-                    "bbox": [bx1 / scale_x, by1 / scale_y, bx2 / scale_x, by2 / scale_y], # 다시 픽셀 좌표로 원복
-                    "confidence": 1.0, # PDF 원본 텍스트이므로 신뢰도 100%
-                    "text": self._clean_text(text),
-                    "crop_path": None
-                })
-                
-        return missed_elements
