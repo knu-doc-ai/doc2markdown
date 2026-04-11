@@ -397,16 +397,13 @@ class ReadingOrderResolver(AssemblyCommonMixin):
             ),
         )
         boundaries: List[float] = [0.0]
-        for split_index in split_indices:
-            left_center = (
-                sorted_candidates[split_index - 1].bbox[0]
-                + sorted_candidates[split_index - 1].bbox[2]
-            ) / 2
-            right_center = (
-                sorted_candidates[split_index].bbox[0]
-                + sorted_candidates[split_index].bbox[2]
-            ) / 2
-            boundaries.append((left_center + right_center) / 2)
+        for left_cluster, right_cluster in zip(clusters, clusters[1:]):
+            boundaries.append(
+                cls._resolve_cluster_boundary(
+                    left_cluster=left_cluster,
+                    right_cluster=right_cluster,
+                )
+            )
         boundaries.append(float(page_right_edge))
 
         bands: List[_ColumnBand] = []
@@ -428,6 +425,34 @@ class ReadingOrderResolver(AssemblyCommonMixin):
             )
 
         return bands if len(bands) > 1 else []
+
+    @classmethod
+    def _resolve_cluster_boundary(
+        cls,
+        left_cluster: List[AssemblyElement],
+        right_cluster: List[AssemblyElement],
+    ) -> float:
+        """Adjacent cluster midpoint를 기본으로 쓰되, 실제 gutter 안에 있을 때만 유지한다."""
+        left_center = (left_cluster[-1].bbox[0] + left_cluster[-1].bbox[2]) / 2
+        right_center = (right_cluster[0].bbox[0] + right_cluster[0].bbox[2]) / 2
+        midpoint = (left_center + right_center) / 2
+
+        left_edge = max(
+            float(element.bbox[2])
+            for element in left_cluster
+            if element.bbox is not None
+        )
+        right_edge = min(
+            float(element.bbox[0])
+            for element in right_cluster
+            if element.bbox is not None
+        )
+
+        if left_edge >= right_edge:
+            return midpoint
+        if left_edge <= midpoint <= right_edge:
+            return midpoint
+        return (left_edge + right_edge) / 2
 
     @classmethod
     def _is_column_candidate(cls, element: AssemblyElement, page_width: float) -> bool:
@@ -509,16 +534,6 @@ class ReadingOrderResolver(AssemblyCommonMixin):
             )
             for index, element in enumerate(page_elements)
         ]
-        column_region_start = cls._estimate_column_region_start(entries, page_plan)
-        if column_region_start is not None:
-            for entry in entries:
-                if (
-                    entry.element.bbox is not None
-                    and cls._entry_top(entry) < column_region_start
-                    and cls._crosses_column_boundary(entry.element, page_plan)
-                ):
-                    entry.resolved_column_id = 0
-
         if page_plan.column_count <= 1:
             return cls._order_region_entries(entries, page_plan, column_ids=[1])
 
@@ -626,32 +641,6 @@ class ReadingOrderResolver(AssemblyCommonMixin):
                 overlap_band_count += 1
 
         return overlap_band_count >= 2
-
-    @classmethod
-    def _estimate_column_region_start(
-        cls,
-        entries: List[_PageEntry],
-        page_plan: _PagePlan,
-    ) -> Optional[float]:
-        """실제 다단 본문이 시작되는 대략적인 y 지점을 찾는다."""
-        if page_plan.column_count <= 1:
-            return None
-
-        column_tops: List[float] = []
-        for band in page_plan.bands:
-            stable_entries = [
-                entry
-                for entry in entries
-                if entry.resolved_column_id == band.id
-                and not cls._crosses_column_boundary(entry.element, page_plan)
-            ]
-            if not stable_entries:
-                continue
-            column_tops.append(min(cls._entry_top(entry) for entry in stable_entries))
-
-        if len(column_tops) < 2:
-            return None
-        return min(column_tops)
 
     @classmethod
     def _crosses_column_boundary(
