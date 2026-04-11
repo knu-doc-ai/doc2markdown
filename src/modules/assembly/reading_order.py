@@ -397,16 +397,13 @@ class ReadingOrderResolver(AssemblyCommonMixin):
             ),
         )
         boundaries: List[float] = [0.0]
-        for split_index in split_indices:
-            left_center = (
-                sorted_candidates[split_index - 1].bbox[0]
-                + sorted_candidates[split_index - 1].bbox[2]
-            ) / 2
-            right_center = (
-                sorted_candidates[split_index].bbox[0]
-                + sorted_candidates[split_index].bbox[2]
-            ) / 2
-            boundaries.append((left_center + right_center) / 2)
+        for left_cluster, right_cluster in zip(clusters, clusters[1:]):
+            boundaries.append(
+                cls._resolve_cluster_boundary(
+                    left_cluster=left_cluster,
+                    right_cluster=right_cluster,
+                )
+            )
         boundaries.append(float(page_right_edge))
 
         bands: List[_ColumnBand] = []
@@ -428,6 +425,34 @@ class ReadingOrderResolver(AssemblyCommonMixin):
             )
 
         return bands if len(bands) > 1 else []
+
+    @classmethod
+    def _resolve_cluster_boundary(
+        cls,
+        left_cluster: List[AssemblyElement],
+        right_cluster: List[AssemblyElement],
+    ) -> float:
+        """Adjacent cluster midpoint를 기본으로 쓰되, 실제 gutter 안에 있을 때만 유지한다."""
+        left_center = (left_cluster[-1].bbox[0] + left_cluster[-1].bbox[2]) / 2
+        right_center = (right_cluster[0].bbox[0] + right_cluster[0].bbox[2]) / 2
+        midpoint = (left_center + right_center) / 2
+
+        left_edge = max(
+            float(element.bbox[2])
+            for element in left_cluster
+            if element.bbox is not None
+        )
+        right_edge = min(
+            float(element.bbox[0])
+            for element in right_cluster
+            if element.bbox is not None
+        )
+
+        if left_edge >= right_edge:
+            return midpoint
+        if left_edge <= midpoint <= right_edge:
+            return midpoint
+        return (left_edge + right_edge) / 2
 
     @classmethod
     def _is_column_candidate(cls, element: AssemblyElement, page_width: float) -> bool:
