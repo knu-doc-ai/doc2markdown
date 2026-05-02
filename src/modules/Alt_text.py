@@ -2,15 +2,22 @@ import os
 import uuid
 import base64
 import ollama
+import requests
 from openai import OpenAI
 
-# Llama-3.2-Vision을 사용하는 방식 (무료임)
-# ollama 설치(1.2G) 후 ollama run llama3.2-vision 을 'cmd'에 입력하여 모델 다운(7.8G) 필요 
+MODEL_NAME = "gemma4:e4b"
 
-client = OpenAI(base_url='http://localhost:11434/v1',
-                api_key='ollama',) # 로컬 Ollama 서버 주소로 설정
+# 성능이 좋지 않은 llama-vision을 버리고, gemma4:e4b를 사용하는 버전.
+def ensure_model_exists(model_name):
+    try:
+        ollama.show(model_name)
+    except Exception:
+        print(f"[{model_name}] 모델 다운로드를 시작합니다...")
+        ollama.pull(model_name)
 
-# 표나 이미지를 받을 때 이미지파일로 받는다
+ensure_model_exists(MODEL_NAME)
+client = OpenAI(base_url='http://localhost:11434/v1', api_key='ollama')
+
 def encode_image(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
@@ -31,23 +38,15 @@ def process_image_with_alt_text(crop_image_path, save_dir="./images"):
     prompt = "Write a one-line concise alt-text (maximum 10 words) for this image. Output ONLY the description text without any labels or bullet points."
 
     response = client.chat.completions.create(
-        model="llama3.2-vision",
+        model=MODEL_NAME,
         messages=[{
             "role": "user",
             "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}},
+                {"type": "text", "text": prompt}
             ],
-        }],extra_body={"keep_alive": 0}
+        }],
+        extra_body={"keep_alive": "5m"} 
     )
     alt_text = response.choices[0].message.content.strip()
-    # 마크다운 이미지 태그 반환
     return f"![{alt_text}]({save_path})\n"
-
-# 실행 예시
-import time
-start_time = time.time()  # 시작 시간 기록
-end_time = time.time()    # 종료 시간 기록
-image_md = process_image_with_alt_text("test_image.png")
-print(image_md)
-print(f"소요 시간: {end_time - start_time:.2f}초")
