@@ -9,7 +9,7 @@ LLM 출력은 block role 승격 또는 공백 보정에만 사용.
 
 import re
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 from modules.assembly.ir import (
@@ -28,8 +28,9 @@ from modules.llm_core import LLMClient, LLMConfig, LocalTransformersLLMClient
 from modules.llm_response_parser import (
     ALLOWED_SEMANTIC_KINDS,
     CaptionLink,
+    ContentRepair,
     SemanticDecision,
-    parse_content_repair,
+    parse_content_repairs,
     parse_semantic_response,
 )
 
@@ -38,6 +39,14 @@ SEMANTIC_TASK = "semantic_enrichment"
 CONTENT_TASK = "content_repair"
 URL_PATTERN = re.compile(r"(?:https?://|www\.|[\w.-]+@[\w.-]+)", re.IGNORECASE)
 MARKDOWN_TABLE_LINE_PATTERN = re.compile(r"^\s*\|.*\|\s*$")
+
+
+@dataclass(frozen=True)
+class _ContentRepairCandidate:
+    node_id: str
+    text: str
+    role: str
+    language: str
 
 
 class SemanticEnricher:
@@ -328,6 +337,9 @@ class ContentEnricher:
             "content_enabled": True,
             "model": client.model_id,
             "enrichment_mode": self.config.mode,
+            "content_batch_size": self.config.content_batch_size,
+            "llm_candidate_count": 0,
+            "batch_count": 0,
             "attempt_count": 0,
             "applied_count": 0,
             "discarded_count": 0,
@@ -337,19 +349,37 @@ class ContentEnricher:
         print(
             f"[LLM][Content] 시작: model={client.model_id}, "
             f"children={len(result.document.children)}, sections={len(result.document.sections)}, "
-            f"max_new_tokens={self.config.max_new_tokens}"
+            f"max_new_tokens={self.config.max_new_tokens}, "
+            f"batch_size={self.config.content_batch_size}"
         )
         started_at = time.perf_counter()
-        progress = {"current": 0, "total": self._count_repair_candidates(result.document.children)}
-        if progress["total"] == 0 and result.document.sections:
-            progress["total"] = self._count_repair_candidates(result.document.sections)
-        children = [self._repair_node(node, warnings, summary, progress) for node in result.document.children]
+        use_section_fallback = not any(isinstance(node, SectionNode) for node in result.document.children) and bool(result.document.sections)
+        candidates = self._collect_repair_candidates(result.document.children)
+        if use_section_fallback:
+            candidates.extend(self._collect_repair_candidates(result.document.sections))
+        summary["llm_candidate_count"] = len(candidates)
+        print(
+            f"[LLM][Content] 후보 수집 완료: llm_candidates={len(candidates)}, "
+            f"batch_size={self.config.content_batch_size}"
+        )
+
+        repairs_by_node = self._generate_content_repairs(candidates, warnings, summary)
+        candidate_ids = {candidate.node_id for candidate in candidates}
+
+        children = [
+            self._repair_node(node, warnings, summary, repairs_by_node, candidate_ids)
+            for node in result.document.children
+        ]
         sections = [node for node in children if isinstance(node, SectionNode)]
         if not sections and result.document.sections:
-            sections = [self._repair_node(section, warnings, summary, progress) for section in result.document.sections]
+            sections = [
+                self._repair_node(section, warnings, summary, repairs_by_node, candidate_ids)
+                for section in result.document.sections
+            ]
         document_metadata = SemanticEnricher._merge_summary(result.document.metadata, "content", summary)
         print(
-            f"[LLM][Content] 완료: attempts={summary['attempt_count']}, "
+            f"[LLM][Content] 완료: candidates={summary['llm_candidate_count']}, "
+            f"batches={summary['batch_count']}, attempts={summary['attempt_count']}, "
             f"applied={summary['applied_count']}, discarded={summary['discarded_count']}, "
             f"rule_repairs={summary['rule_repair_count']}, warnings={len(warnings)}, "
             f"elapsed={_elapsed_seconds(started_at)}s"
@@ -371,7 +401,8 @@ class ContentEnricher:
         node: Any,
         warnings: list[AssemblyWarning],
         summary: dict[str, Any],
-        progress: dict[str, int] | None = None,
+        repairs_by_node: dict[str, ContentRepair],
+        candidate_ids: set[str],
     ) -> Any:
         if isinstance(node, SectionNode):
             title, metadata = self._repair_text(
@@ -381,9 +412,13 @@ class ContentEnricher:
                 warnings=warnings,
                 summary=summary,
                 role="heading",
-                progress=progress,
+                repairs_by_node=repairs_by_node,
+                candidate_ids=candidate_ids,
             )
-            children = [self._repair_node(child, warnings, summary, progress) for child in node.children]
+            children = [
+                self._repair_node(child, warnings, summary, repairs_by_node, candidate_ids)
+                for child in node.children
+            ]
             return replace(node, title=title, children=children, metadata=metadata)
 
         if isinstance(node, ParagraphGroup):
@@ -394,12 +429,16 @@ class ContentEnricher:
                 warnings=warnings,
                 summary=summary,
                 role="paragraph",
-                progress=progress,
+                repairs_by_node=repairs_by_node,
+                candidate_ids=candidate_ids,
             )
             return replace(node, text=text, metadata=metadata)
 
         if isinstance(node, ListGroup):
-            items = [self._repair_list_item(item, warnings, summary, progress) for item in node.items]
+            items = [
+                self._repair_list_item(item, warnings, summary, repairs_by_node, candidate_ids)
+                for item in node.items
+            ]
             return replace(node, items=items)
 
         return node
@@ -409,7 +448,8 @@ class ContentEnricher:
         item: ListGroupItem,
         warnings: list[AssemblyWarning],
         summary: dict[str, Any],
-        progress: dict[str, int] | None = None,
+        repairs_by_node: dict[str, ContentRepair],
+        candidate_ids: set[str],
     ) -> ListGroupItem:
         node_id = item.block_ids[0] if item.block_ids else "list_item"
         text, metadata = self._repair_text(
@@ -419,7 +459,8 @@ class ContentEnricher:
             warnings=warnings,
             summary=summary,
             role="list_item",
-            progress=progress,
+            repairs_by_node=repairs_by_node,
+            candidate_ids=candidate_ids,
         )
         return replace(item, text=text, metadata=metadata)
 
@@ -432,7 +473,8 @@ class ContentEnricher:
         warnings: list[AssemblyWarning],
         summary: dict[str, Any],
         role: str,
-        progress: dict[str, int] | None = None,
+        repairs_by_node: dict[str, ContentRepair],
+        candidate_ids: set[str],
     ) -> tuple[Any, dict[str, Any]]:
         if not isinstance(text, str) or not text.strip() or self._should_skip_text(text, metadata):
             return text, dict(metadata)
@@ -451,40 +493,15 @@ class ContentEnricher:
                 }
             return text, dict(metadata)
 
-        summary["attempt_count"] += 1
-        self._log_repair_progress_start(progress, node_id, role, language)
-        try:
-            response = self._client().generate_json(
-                CONTENT_TASK,
-                {
-                    "schema": {"repairs": [{"node_id": "string", "text": "string", "confidence": "float"}]},
-                    "items": [{"node_id": node_id, "text": text, "language": language, "role": role}],
-                    "constraint": "공백만 변경. 비공백 문자 시퀀스 완전 동일 유지.",
-                },
-            )
-        except Exception as error:
-            print(
-                f"[LLM][Content] repair 실패: node_id={node_id}, role={role}, "
-                f"language={language}, error={type(error).__name__}, message={_format_error(error)}"
-            )
-            warnings.append(
-                SemanticEnricher._warning(
-                    "llm_content_failed",
-                    str(error),
-                    element_ids=[node_id],
-                    metadata={"role": role, "language": language},
-                )
-            )
+        if node_id not in candidate_ids:
             return text, dict(metadata)
 
-        repair = parse_content_repair(response, node_id)
+        repair = repairs_by_node.get(node_id)
         if repair is None:
-            self._log_repair_progress_done(progress, node_id, "no_repair")
             return text, dict(metadata)
 
         if self._non_space_signature(text) != self._non_space_signature(repair.text):
             summary["discarded_count"] += 1
-            self._log_repair_progress_done(progress, node_id, "discarded")
             warnings.append(
                 SemanticEnricher._warning(
                     "llm_content_preservation_failed",
@@ -497,61 +514,140 @@ class ContentEnricher:
 
         if repair.text != text:
             summary["applied_count"] += 1
-            self._log_repair_progress_done(progress, node_id, "applied")
             return repair.text, {
                 **dict(metadata),
                 **self._llm_metadata(CONTENT_TASK, repair.confidence),
                 "llm_language": language,
             }
 
-        self._log_repair_progress_done(progress, node_id, "unchanged")
         return text, dict(metadata)
 
-    def _count_repair_candidates(self, nodes: list[Any]) -> int:
-        count = 0
+    def _collect_repair_candidates(self, nodes: list[Any]) -> list[_ContentRepairCandidate]:
+        candidates: list[_ContentRepairCandidate] = []
         for node in nodes:
             if isinstance(node, SectionNode):
-                if self._is_llm_repair_candidate(node.title, node.metadata):
-                    count += 1
-                count += self._count_repair_candidates(node.children)
+                candidate = self._build_repair_candidate(node.id, node.title, node.metadata, "heading")
+                if candidate is not None:
+                    candidates.append(candidate)
+                candidates.extend(self._collect_repair_candidates(node.children))
             elif isinstance(node, ParagraphGroup):
-                if self._is_llm_repair_candidate(node.text, node.metadata):
-                    count += 1
+                candidate = self._build_repair_candidate(node.id, node.text, node.metadata, "paragraph")
+                if candidate is not None:
+                    candidates.append(candidate)
             elif isinstance(node, ListGroup):
                 for item in node.items:
-                    if self._is_llm_repair_candidate(item.text, item.metadata):
-                        count += 1
-        return count
+                    node_id = item.block_ids[0] if item.block_ids else "list_item"
+                    candidate = self._build_repair_candidate(node_id, item.text, item.metadata, "list_item")
+                    if candidate is not None:
+                        candidates.append(candidate)
+        return candidates
 
-    def _is_llm_repair_candidate(self, text: Any, metadata: dict[str, Any]) -> bool:
-        if not isinstance(text, str) or not text.strip() or self._should_skip_text(text, metadata):
-            return False
-        return self._detect_language(text) != "english"
-
-    @staticmethod
-    def _log_repair_progress_start(
-        progress: dict[str, int] | None,
+    def _build_repair_candidate(
+        self,
         node_id: str,
+        text: Any,
+        metadata: dict[str, Any],
         role: str,
-        language: str,
-    ) -> None:
-        if progress is None:
-            return
-        progress["current"] += 1
-        print(
-            f"[LLM][Content] repair {progress['current']}/{progress['total']} 시작: "
-            f"node_id={node_id}, role={role}, language={language}"
-        )
+    ) -> _ContentRepairCandidate | None:
+        if not isinstance(text, str) or not text.strip() or self._should_skip_text(text, metadata):
+            return None
+
+        language = self._detect_language(text)
+        if language == "english":
+            return None
+        return _ContentRepairCandidate(node_id=node_id, text=text, role=role, language=language)
+
+    def _generate_content_repairs(
+        self,
+        candidates: list[_ContentRepairCandidate],
+        warnings: list[AssemblyWarning],
+        summary: dict[str, Any],
+    ) -> dict[str, ContentRepair]:
+        if not candidates:
+            return {}
+
+        batches = list(self._chunk_candidates(candidates, self.config.content_batch_size))
+        summary["attempt_count"] += len(candidates)
+        summary["batch_count"] = len(batches)
+
+        repairs_by_node: dict[str, ContentRepair] = {}
+        for batch_index, batch in enumerate(batches, start=1):
+            batch_ids = [candidate.node_id for candidate in batch]
+            started_at = time.perf_counter()
+            print(
+                f"[LLM][Content] batch {batch_index}/{len(batches)} 시작: "
+                f"items={len(batch)}, node_ids={_format_node_ids(batch_ids)}"
+            )
+            try:
+                response = self._client().generate_json(CONTENT_TASK, self._build_content_payload(batch))
+            except Exception as error:
+                print(
+                    f"[LLM][Content] batch {batch_index}/{len(batches)} 실패: "
+                    f"items={len(batch)}, error={type(error).__name__}, "
+                    f"message={_format_error(error)}, elapsed={_elapsed_seconds(started_at)}s"
+                )
+                warnings.append(
+                    SemanticEnricher._warning(
+                        "llm_content_failed",
+                        str(error),
+                        element_ids=batch_ids,
+                        metadata={"batch_index": batch_index, "batch_size": len(batch)},
+                    )
+                )
+                continue
+
+            repairs = parse_content_repairs(response)
+            matched_count = self._store_matched_repairs(batch, repairs, repairs_by_node)
+            print(
+                f"[LLM][Content] batch {batch_index}/{len(batches)} 완료: "
+                f"parsed={len(repairs)}, matched={matched_count}, "
+                f"elapsed={_elapsed_seconds(started_at)}s"
+            )
+        return repairs_by_node
 
     @staticmethod
-    def _log_repair_progress_done(
-        progress: dict[str, int] | None,
-        node_id: str,
-        status: str,
-    ) -> None:
-        if progress is None:
-            return
-        print(f"[LLM][Content] repair {progress['current']}/{progress['total']} 완료: node_id={node_id}, status={status}")
+    def _build_content_payload(batch: list[_ContentRepairCandidate]) -> dict[str, Any]:
+        return {
+            "schema": {"repairs": [{"node_id": "string", "text": "string", "confidence": "float"}]},
+            "items": [
+                {
+                    "node_id": candidate.node_id,
+                    "text": candidate.text,
+                    "language": candidate.language,
+                    "role": candidate.role,
+                }
+                for candidate in batch
+            ],
+            "constraint": "공백만 변경. 비공백 문자 시퀀스 완전 동일 유지.",
+        }
+
+    @staticmethod
+    def _chunk_candidates(
+        candidates: list[_ContentRepairCandidate],
+        batch_size: int,
+    ) -> list[list[_ContentRepairCandidate]]:
+        return [
+            candidates[index:index + batch_size]
+            for index in range(0, len(candidates), batch_size)
+        ]
+
+    @staticmethod
+    def _store_matched_repairs(
+        batch: list[_ContentRepairCandidate],
+        repairs: list[ContentRepair],
+        repairs_by_node: dict[str, ContentRepair],
+    ) -> int:
+        repair_by_id = {repair.node_id: repair for repair in repairs}
+        matched_count = 0
+        for candidate in batch:
+            repair = repair_by_id.get(candidate.node_id)
+            if repair is None and len(batch) == 1 and len(repairs) == 1:
+                repair = repairs[0]
+            if repair is None:
+                continue
+            repairs_by_node[candidate.node_id] = repair
+            matched_count += 1
+        return matched_count
 
     @staticmethod
     def _should_skip_text(text: str, metadata: dict[str, Any]) -> bool:
@@ -607,6 +703,12 @@ def _format_error(error: BaseException) -> str:
     if message:
         return message[0]
     return repr(error)
+
+
+def _format_node_ids(node_ids: list[str], *, limit: int = 3) -> str:
+    if len(node_ids) <= limit:
+        return ", ".join(node_ids)
+    return f"{', '.join(node_ids[:limit])}, ..."
 
 
 __all__ = ["ContentEnricher", "SemanticEnricher"]

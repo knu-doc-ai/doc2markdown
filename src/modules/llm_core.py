@@ -39,6 +39,7 @@ class LLMConfig:
     mode: str = DEFAULT_ENRICHMENT_MODE
     max_new_tokens: int = 512
     progress_log_interval: int = 0
+    content_batch_size: int = 8
     temperature: float = 0.0
 
     @classmethod
@@ -52,6 +53,7 @@ class LLMConfig:
             mode=mode,
             max_new_tokens=_env_int("LLM_MAX_NEW_TOKENS", default=512),
             progress_log_interval=_env_int("LLM_PROGRESS_LOG_INTERVAL", default=0),
+            content_batch_size=max(1, _env_int("LLM_CONTENT_BATCH_SIZE", default=8)),
             temperature=_env_float("LLM_TEMPERATURE", default=0.0),
         )
 

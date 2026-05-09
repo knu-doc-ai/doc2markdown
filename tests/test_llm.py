@@ -133,7 +133,10 @@ class ContentEnricherTests(unittest.TestCase):
             }
         )
 
-        enriched = ContentEnricher(config=enabled_config("content"), client=client).apply(result)
+        enriched = ContentEnricher(
+            config=LLMConfig(mode="content", model_id="fake-local-llm"),
+            client=client,
+        ).apply(result)
 
         self.assertEqual(enriched.document.children[0].text, "한국어문장입니다")
         self.assertIn("llm_content_preservation_failed", [warning.code for warning in enriched.warnings])
@@ -157,6 +160,49 @@ class ContentEnricherTests(unittest.TestCase):
 
         self.assertEqual(enriched.document.children[0].text, "This paragraph contains information.")
         self.assertEqual(client.calls, [])
+
+    def test_korean_repairs_are_requested_in_batches(self):
+        result = AssemblyResult(
+            document=AssembledDocument(
+                children=[
+                    ParagraphGroup(
+                        id="paragraph_1",
+                        block_ids=["b1"],
+                        text="한국어문장입니다",
+                    ),
+                    ParagraphGroup(
+                        id="paragraph_2",
+                        block_ids=["b2"],
+                        text="두번째문장입니다",
+                    ),
+                ]
+            ),
+            metadata=AssemblyMeta(stage="structure_assembled"),
+        )
+        client = FakeLLMClient(
+            {
+                "content_repair": {
+                    "repairs": [
+                        {"node_id": "paragraph_1", "text": "한국어 문장입니다", "confidence": 0.9},
+                        {"node_id": "paragraph_2", "text": "두번째 문장입니다", "confidence": 0.91},
+                    ]
+                }
+            }
+        )
+
+        enriched = ContentEnricher(
+            config=LLMConfig(
+                mode="content",
+                model_id="fake-local-llm",
+                content_batch_size=8,
+            ),
+            client=client,
+        ).apply(result)
+
+        self.assertEqual(enriched.document.children[0].text, "한국어 문장입니다")
+        self.assertEqual(enriched.document.children[1].text, "두번째 문장입니다")
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(len(client.calls[0][1]["items"]), 2)
 
     def test_baseline_mode_is_noop(self):
         result = AssemblyResult(

@@ -8,7 +8,7 @@ SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from modules.llm_response_parser import parse_content_repair, parse_semantic_response
+from modules.llm_response_parser import parse_content_repair, parse_content_repairs, parse_semantic_response
 
 
 class SemanticResponseParserTests(unittest.TestCase):
@@ -83,6 +83,19 @@ class SemanticResponseParserTests(unittest.TestCase):
 
 
 class ContentRepairParserTests(unittest.TestCase):
+    def test_content_repairs_returns_all_valid_items_for_batch_response(self):
+        repairs = parse_content_repairs(
+            {
+                "repairs": [
+                    {"node_id": "p1", "text": "첫 번째 문장", "confidence": 0.9},
+                    {"node_id": "p2", "text": "두 번째 문장", "confidence": "0.8"},
+                    {"node_id": "p3", "text": "낮은 신뢰도", "confidence": 0.4},
+                ]
+            }
+        )
+
+        self.assertEqual([repair.node_id for repair in repairs], ["p1", "p2"])
+
     def test_content_repair_prefers_matching_node_id(self):
         repair = parse_content_repair(
             {

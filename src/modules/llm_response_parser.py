@@ -60,11 +60,7 @@ def parse_semantic_response(response: Any) -> ParsedSemanticResponse:
 
 
 def parse_content_repair(response: Any, node_id: str) -> ContentRepair | None:
-    repairs: list[ContentRepair] = []
-    for item in _extract_list(response, CONTENT_REPAIR_KEYS):
-        repair = _parse_content_repair(item)
-        if repair is not None:
-            repairs.append(repair)
+    repairs = parse_content_repairs(response)
 
     for repair in repairs:
         if repair.node_id == node_id:
@@ -73,6 +69,15 @@ def parse_content_repair(response: Any, node_id: str) -> ContentRepair | None:
     if len(repairs) == 1:
         return repairs[0]
     return None
+
+
+def parse_content_repairs(response: Any) -> list[ContentRepair]:
+    repairs: list[ContentRepair] = []
+    for item in _extract_list(response, CONTENT_REPAIR_KEYS):
+        repair = _parse_content_repair(item)
+        if repair is not None:
+            repairs.append(repair)
+    return repairs
 
 
 def _parse_semantic_decision(item: Any) -> SemanticDecision | None:
@@ -165,5 +170,6 @@ __all__ = [
     "ParsedSemanticResponse",
     "SemanticDecision",
     "parse_content_repair",
+    "parse_content_repairs",
     "parse_semantic_response",
 ]
