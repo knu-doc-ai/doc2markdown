@@ -1,0 +1,48 @@
+{
+  "pages": [
+    {
+      "page": 1,
+      "width": 1000,
+      "height": 1400,
+      "column_count": 2,
+      "elements": [
+        {
+          "id": "l1",
+          "page": 1,
+          "label": "heading",
+          "bbox": [50, 40, 460, 80],
+          "text": "Left heading",
+          "column_id": 1,
+          "reading_order": 1
+        },
+        {
+          "id": "l2",
+          "page": 1,
+          "label": "text",
+          "bbox": [50, 100, 460, 140],
+          "text": "Left body",
+          "column_id": 1,
+          "reading_order": 2
+        },
+        {
+          "id": "r1",
+          "page": 1,
+          "label": "heading",
+          "bbox": [540, 40, 950, 80],
+          "text": "Right heading",
+          "column_id": 2,
+          "reading_order": 3
+        },
+        {
+          "id": "r2",
+          "page": 1,
+          "label": "text",
+          "bbox": [540, 100, 950, 140],
+          "text": "Right body",
+          "column_id": 2,
+          "reading_order": 4
+        }
+      ]
+    }
+  ]
+}

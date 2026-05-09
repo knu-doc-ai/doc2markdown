@@ -1,0 +1,39 @@
+{
+  "layout_output": {
+    "file_name": "sample_layout.pdf",
+    "total_pages": 1,
+    "pages": [
+      {
+        "page_num": 1,
+        "image_path": "data/temp\\sample_layout_page_1.png",
+        "raw_text": "2. 기능 요구사항",
+        "width": 1000,
+        "height": 1400,
+        "elements": [
+          {
+            "id": 5,
+            "type": "Section-header",
+            "bbox": [50, 40, 400, 90],
+            "confidence": 0.94,
+            "crop_path": null
+          },
+          {
+            "id": 7,
+            "type": "Table",
+            "bbox": [120, 150, 880, 500],
+            "confidence": 0.91,
+            "crop_path": "data/output\\sample_layout.pdf\\crops\\p1_table_7.png"
+          },
+          {
+            "id": 8,
+            "type": "Text",
+            "bbox": [120, 520, 880, 560],
+            "confidence": 0.88,
+            "crop_path": null
+          }
+        ]
+      }
+    ]
+  },
+  "table_markdown": "| 카테고리 | 기능 ID | 요구사항 내용 | 비고 |\n|---|---|---|---|\n| 기본 연산 | FUNC-001 | 덧셈 연산 | IEEE 754 준수 |"
+}

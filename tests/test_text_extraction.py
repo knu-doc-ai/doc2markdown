@@ -1,18 +1,17 @@
 import os
+import json
 import sys
-import pprint
 import cv2  # 시각화를 위해 OpenCV 추가
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.modules.ingestion import FilePreProcessor  # 1단계
-from src.modules.vision_engine import VisionEngine # 2단계
+from src.modules.text_extractor import TextExtractor
 
 def draw_bboxes_from_json(final_output, output_base_dir="data/output"):
     """
     최종 JSON 데이터를 바탕으로 원본 이미지에 BBox를 그리고 저장하는 시각화 함수
     """
     file_name = final_output["file_name"]
-    vis_dir = os.path.join(output_base_dir, file_name, "visualized_pages")
+    vis_dir = os.path.join(output_base_dir, file_name, "with_text_visualized_pages")
     os.makedirs(vis_dir, exist_ok=True)
     
     print(f"\n🎨 Bounding Box 시각화 시작 (저장 경로: {vis_dir})")
@@ -56,57 +55,40 @@ def draw_bboxes_from_json(final_output, output_base_dir="data/output"):
             cv2.putText(img_cv, text, (coords[0], coords[1] - 15), 
                         cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3)
             
-        save_path = os.path.join(vis_dir, f"page_{page_num}_visualized.png")
+        save_path = os.path.join(vis_dir, f"page_{page_num}_with_text_visualized.png")
         cv2.imwrite(save_path, img_cv)
         print(f"   - [Page {page_num}] 시각화 완료: {len(elements)}개 객체 표시")
         
     print(f"✅ 모든 시각화 이미지 생성 완료!\n")
 
+def test_text_extraction(pdf_path, json_path):
+    if not os.path.exists(json_path):
+        print("🚨 metadata.json이 없습니다. 비전 파이프라인을 먼저 돌려주세요.")
+        return
 
-def test_vision_pipeline(file_path):
-    print(f"\n{'='*50}")
-    print(f"🔍 비전 엔진 단독 테스트 시작: {os.path.basename(file_path)}")
-    print(f"{'='*50}\n")
+    # 2. 비전 엔진 결과물 읽기
+    with open(json_path, "r", encoding="utf-8") as f:
+        metadata = json.load(f)
 
-    # 1. 1단계: 파일 전처리
-    preprocessor = FilePreProcessor()
-    print("STEP 1: 파일 전처리 중...")
-    ingestion_data = preprocessor.process(file_path)
-    
-    # 2. 2단계: 비전 분석
-    vision_engine = VisionEngine(output_base_dir="data/output")
-    print("\nSTEP 2: 비전 분석 및 객체 추출 중...")
-    final_output = vision_engine.process_document(ingestion_data)
+    # 3. 텍스트 추출기 가동!
+    # 🌟 수정 포인트: 초기화 시점이 아니라, 실행 시점에 pdf_path를 넘깁니다!
+    extractor = TextExtractor()
+    enriched_metadata = extractor.extract_text(metadata, pdf_path)
 
-    # 3. 결과 검증 로깅
-    print(f"\n{'='*50}")
-    print("✅ 테스트 완료! 추출된 데이터 요약")
-    print(f"{'='*50}")
-    
-    for page in final_output["pages"]:
-        print(f"\n📄 [Page {page['page_num']}]")
-        elements = page.get("elements", [])
-        print(f"   - 탐지된 요소 개수: {len(elements)}개")
+    # 4. 결과 저장 (텍스트가 추가된 최종 완성본)
+    output_path = json_path.replace("metadata.json", "metadata_with_text.json")
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(enriched_metadata, f, ensure_ascii=False, indent=4)
         
-        tables = [e for e in elements if e["type"] == "Table"]
-        figures = [e for e in elements if e["type"] in ["Picture", "Figure"]]
-        
-        print(f"   - 📊 추출된 표: {len(tables)}개")
-        print(f"   - 🖼️ 추출된 그림: {len(figures)}개")
-
-    print(f"\n📂 최종 JSON 메타데이터 위치: data/output/{final_output['file_name']}/metadata.json")
+    print(f"\n🎉 텍스트 추출 완료! 최종 데이터가 저장되었습니다: {output_path}")
     
-    # ⭐ 4. 눈으로 직접 확인하기 위한 시각화 함수 호출!
-    draw_bboxes_from_json(final_output)
-
+    draw_bboxes_from_json(enriched_metadata)
 
 if __name__ == "__main__":
-    SAMPLE_PATH_LIST = ["data/raw/calculator_srs_final.pdf",
-                        "data/raw/aiReadable.pdf"]
+    SAMPLE_PATH_LIST = [
+        ("data/raw/calculator_srs_final.pdf", "data/output/calculator_srs_final.pdf/metadata.json"),
+        ("data/raw/aiReadable.pdf", "data/output/aiReadable.pdf/metadata.json")
+    ]
     
-    for sample_path in SAMPLE_PATH_LIST:
-        if os.path.exists(sample_path):
-            test_vision_pipeline(sample_path)
-        else:
-            print(f"🚨 파일을 찾을 수 없습니다: {sample_path}")
-        print("data/raw/ 폴더에 테스트할 파일을 넣어주세요.")
+    for pdf_path, json_path in SAMPLE_PATH_LIST:
+        test_text_extraction(pdf_path, json_path)

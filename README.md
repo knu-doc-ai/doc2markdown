@@ -58,8 +58,11 @@ doc2markdown/
 conda create -n lg_agent python=3.10
 conda activate lg_agent
 
-# 패키지 설치
+# 1. 필수 라이브러리 일괄 설치
 pip install -r requirements.txt
+
+# 2. GPU(CUDA 11.8 기준) 사용을 위한 PyTorch 설치
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ~~~
 
 ### 2. 환경 변수 설정

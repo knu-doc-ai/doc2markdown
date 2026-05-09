@@ -1,0 +1,30 @@
+[
+  {
+    "id": "title_1",
+    "page": 1,
+    "label": "Title",
+    "bbox": [40, 40, 500, 80],
+    "text": "Section A"
+  },
+  {
+    "id": "bullet_1",
+    "page": 1,
+    "label": "bullet",
+    "bbox": [60, 100, 500, 130],
+    "text": "First bullet"
+  },
+  {
+    "id": "bullet_2",
+    "page": 1,
+    "label": "list",
+    "bbox": [60, 140, 500, 170],
+    "text": "Second bullet"
+  },
+  {
+    "id": "body_1",
+    "page": 1,
+    "label": "body",
+    "bbox": [40, 200, 500, 240],
+    "text": "Body under list"
+  }
+]
