@@ -338,6 +338,7 @@ class ContentEnricher:
             "model": client.model_id,
             "enrichment_mode": self.config.mode,
             "content_batch_size": self.config.content_batch_size,
+            "content_min_chars": self.config.content_min_chars,
             "llm_candidate_count": 0,
             "batch_count": 0,
             "attempt_count": 0,
@@ -350,7 +351,7 @@ class ContentEnricher:
             f"[LLM][Content] 시작: model={client.model_id}, "
             f"children={len(result.document.children)}, sections={len(result.document.sections)}, "
             f"max_new_tokens={self.config.max_new_tokens}, "
-            f"batch_size={self.config.content_batch_size}"
+            f"batch_size={self.config.content_batch_size}, min_chars={self.config.content_min_chars}"
         )
         started_at = time.perf_counter()
         use_section_fallback = not any(isinstance(node, SectionNode) for node in result.document.children) and bool(result.document.sections)
@@ -360,7 +361,7 @@ class ContentEnricher:
         summary["llm_candidate_count"] = len(candidates)
         print(
             f"[LLM][Content] 후보 수집 완료: llm_candidates={len(candidates)}, "
-            f"batch_size={self.config.content_batch_size}"
+            f"batch_size={self.config.content_batch_size}, min_chars={self.config.content_min_chars}"
         )
 
         repairs_by_node = self._generate_content_repairs(candidates, warnings, summary)
@@ -554,6 +555,8 @@ class ContentEnricher:
 
         language = self._detect_language(text)
         if language == "english":
+            return None
+        if len(self._non_space_signature(text)) < self.config.content_min_chars:
             return None
         return _ContentRepairCandidate(node_id=node_id, text=text, role=role, language=language)
 

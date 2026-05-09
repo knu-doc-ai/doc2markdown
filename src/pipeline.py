@@ -284,6 +284,7 @@ class DocumentToMarkdownPipeline:
         print(f"[Pipeline] LOCAL_LLM_MODEL_ID={self.llm_config.model_id}")
         print(f"[Pipeline] LLM_MAX_NEW_TOKENS={self.llm_config.max_new_tokens}")
         print(f"[Pipeline] LLM_CONTENT_BATCH_SIZE={self.llm_config.content_batch_size}")
+        print(f"[Pipeline] LLM_CONTENT_MIN_CHARS={self.llm_config.content_min_chars}")
 
     def _save_json(self, path: Path, payload: Any) -> None:
         """UTF-8 JSON 파일 저장."""

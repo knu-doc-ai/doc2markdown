@@ -85,6 +85,7 @@ streamlit run src/ui/app.py
 LLM 후처리는 기본값 `baseline`에서는 실행되지 않습니다. 실제 모델 동작 확인은 `lg_agent` 환경에서 별도로 진행합니다.
 `.env`의 `LLM_PROGRESS_LOG_INTERVAL`은 토큰 생성 진행 로그를 몇 토큰마다 찍을지 정합니다. `0`이면 토큰 진행 로그를 끕니다.
 `LLM_CONTENT_BATCH_SIZE`는 content repair를 한 번에 몇 개씩 묶을지 정합니다.
+`LLM_CONTENT_MIN_CHARS`는 공백 제외 글자 수가 이 값 이상인 텍스트만 LLM 띄어쓰기 보정 대상으로 삼습니다.
 
 ~~~powershell
 conda activate lg_agent

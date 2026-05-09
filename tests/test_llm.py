@@ -134,7 +134,7 @@ class ContentEnricherTests(unittest.TestCase):
         )
 
         enriched = ContentEnricher(
-            config=LLMConfig(mode="content", model_id="fake-local-llm"),
+            config=LLMConfig(mode="content", model_id="fake-local-llm", content_min_chars=0),
             client=client,
         ).apply(result)
 
@@ -195,6 +195,7 @@ class ContentEnricherTests(unittest.TestCase):
                 mode="content",
                 model_id="fake-local-llm",
                 content_batch_size=8,
+                content_min_chars=0,
             ),
             client=client,
         ).apply(result)
@@ -203,6 +204,41 @@ class ContentEnricherTests(unittest.TestCase):
         self.assertEqual(enriched.document.children[1].text, "두번째 문장입니다")
         self.assertEqual(len(client.calls), 1)
         self.assertEqual(len(client.calls[0][1]["items"]), 2)
+
+    def test_content_repair_skips_text_below_min_chars_threshold(self):
+        result = AssemblyResult(
+            document=AssembledDocument(
+                children=[
+                    ParagraphGroup(
+                        id="paragraph_1",
+                        block_ids=["b1"],
+                        text="짧은문장",
+                    )
+                ]
+            ),
+            metadata=AssemblyMeta(stage="structure_assembled"),
+        )
+        client = FakeLLMClient(
+            {
+                "content_repair": {
+                    "repairs": [
+                        {"node_id": "paragraph_1", "text": "짧은 문장", "confidence": 0.9}
+                    ]
+                }
+            }
+        )
+
+        enriched = ContentEnricher(
+            config=LLMConfig(
+                mode="content",
+                model_id="fake-local-llm",
+                content_min_chars=20,
+            ),
+            client=client,
+        ).apply(result)
+
+        self.assertEqual(enriched.document.children[0].text, "짧은문장")
+        self.assertEqual(client.calls, [])
 
     def test_baseline_mode_is_noop(self):
         result = AssemblyResult(
