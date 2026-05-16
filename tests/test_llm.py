@@ -13,6 +13,7 @@ from modules.assembly.ir import (
     AssemblyMeta,
     AssemblyResult,
     AssembledDocument,
+    PageStats,
     ParagraphGroup,
     TableRef,
 )
@@ -107,6 +108,91 @@ class SemanticEnricherTests(unittest.TestCase):
         self.assertEqual(enriched.ordered_elements[1].kind, "caption")
         self.assertEqual(enriched.document.table_refs[0].caption_id, "cap1")
         self.assertTrue(enriched.document.table_refs[0].metadata["llm_enriched"])
+
+    def test_semantic_payload_filters_body_text_and_adds_hints(self):
+        result = AssemblyResult(
+            ordered_elements=[
+                AssemblyElement(
+                    id="h1",
+                    page=1,
+                    kind="text",
+                    text="1.2 범위 및 제약사항",
+                    bbox=(10.0, 10.0, 300.0, 28.0),
+                ),
+                AssemblyElement(
+                    id="p1",
+                    page=1,
+                    kind="text",
+                    text="본 문서는 웹 기반 계산기 애플리케이션의 요구사항을 정의합니다.",
+                    bbox=(10.0, 40.0, 300.0, 56.0),
+                ),
+                AssemblyElement(
+                    id="cap1",
+                    page=1,
+                    kind="text",
+                    text="표 1. 계산기 주요 기능",
+                    bbox=(10.0, 70.0, 300.0, 86.0),
+                ),
+                AssemblyElement(
+                    id="existing_heading",
+                    page=1,
+                    kind="heading",
+                    text="개요",
+                    bbox=(10.0, 100.0, 300.0, 124.0),
+                ),
+            ],
+            page_stats=[PageStats(page=1, body_font_size=12.0)],
+            metadata=AssemblyMeta(stage="normalized"),
+        )
+
+        payload = SemanticEnricher._build_semantic_payload(result)
+        candidates_by_id = {candidate["id"]: candidate for candidate in payload["candidates"]}
+
+        self.assertIn("h1", candidates_by_id)
+        self.assertIn("cap1", candidates_by_id)
+        self.assertIn("existing_heading", candidates_by_id)
+        self.assertNotIn("p1", candidates_by_id)
+        self.assertEqual(candidates_by_id["h1"]["semantic_hint"], "heading")
+        self.assertEqual(candidates_by_id["h1"]["semantic_reason"], "numeric_heading_pattern")
+        self.assertEqual(candidates_by_id["cap1"]["semantic_hint"], "caption")
+        self.assertEqual(payload["candidate_stats"]["eligible_count"], 4)
+        self.assertEqual(payload["candidate_stats"]["included_count"], 3)
+        self.assertEqual(payload["candidate_stats"]["skipped_count"], 1)
+
+    def test_semantic_summary_records_candidate_filter_counts(self):
+        result = AssemblyResult(
+            ordered_elements=[
+                AssemblyElement(id="h1", page=1, kind="text", text="1.2 범위 및 제약사항"),
+                AssemblyElement(id="p1", page=1, kind="text", text="본문 문장입니다."),
+            ],
+            document=AssembledDocument(),
+            metadata=AssemblyMeta(stage="normalized"),
+        )
+        client = FakeLLMClient({"semantic_enrichment": {"semantic_decisions": []}})
+
+        enriched = SemanticEnricher(config=enabled_config("semantic"), client=client).apply(result)
+        summary = enriched.document.metadata["llm_enrichment"]["semantic"]
+
+        self.assertEqual(summary["eligible_candidate_count"], 2)
+        self.assertEqual(summary["llm_candidate_count"], 1)
+        self.assertEqual(summary["skipped_candidate_count"], 1)
+
+    def test_semantic_skips_llm_call_when_no_candidates_remain(self):
+        result = AssemblyResult(
+            ordered_elements=[
+                AssemblyElement(id="p1", page=1, kind="text", text="본문 문장입니다."),
+            ],
+            document=AssembledDocument(),
+            metadata=AssemblyMeta(stage="normalized"),
+        )
+        client = FakeLLMClient({"semantic_enrichment": AssertionError("호출되면 안 됨")})
+
+        enriched = SemanticEnricher(config=enabled_config("semantic"), client=client).apply(result)
+        summary = enriched.document.metadata["llm_enrichment"]["semantic"]
+
+        self.assertEqual(client.calls, [])
+        self.assertEqual(summary["llm_candidate_count"], 0)
+        self.assertEqual(summary["skipped_candidate_count"], 1)
 
 
 class ContentEnricherTests(unittest.TestCase):

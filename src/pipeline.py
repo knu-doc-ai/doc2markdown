@@ -283,6 +283,7 @@ class DocumentToMarkdownPipeline:
         print(f"[Pipeline] LLM_ENRICHMENT_MODE={self.llm_config.mode}")
         print(f"[Pipeline] LOCAL_LLM_MODEL_ID={self.llm_config.model_id}")
         print(f"[Pipeline] LLM_MAX_NEW_TOKENS={self.llm_config.max_new_tokens}")
+        print(f"[Pipeline] LLM_SEMANTIC_MAX_NEW_TOKENS={self.llm_config.max_new_tokens_for_task('semantic_enrichment')}")
         print(f"[Pipeline] LLM_CONTENT_MAX_NEW_TOKENS={self.llm_config.max_new_tokens_for_task('content_repair')}")
         print(f"[Pipeline] LLM_CONTENT_BATCH_SIZE={self.llm_config.content_batch_size}")
         print(f"[Pipeline] LLM_CONTENT_MIN_CHARS={self.llm_config.content_min_chars}")

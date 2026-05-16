@@ -38,6 +38,7 @@ class LLMConfig:
     model_id: str = DEFAULT_MODEL_ID
     mode: str = DEFAULT_ENRICHMENT_MODE
     max_new_tokens: int = 512
+    semantic_max_new_tokens: int | None = None
     content_max_new_tokens: int | None = None
     progress_log_interval: int = 0
     content_batch_size: int = 8
@@ -54,6 +55,7 @@ class LLMConfig:
             model_id=os.getenv("LOCAL_LLM_MODEL_ID", DEFAULT_MODEL_ID).strip() or DEFAULT_MODEL_ID,
             mode=mode,
             max_new_tokens=_env_int("LLM_MAX_NEW_TOKENS", default=512),
+            semantic_max_new_tokens=_env_optional_int("LLM_SEMANTIC_MAX_NEW_TOKENS"),
             content_max_new_tokens=_env_optional_int("LLM_CONTENT_MAX_NEW_TOKENS"),
             progress_log_interval=_env_int("LLM_PROGRESS_LOG_INTERVAL", default=0),
             content_batch_size=max(1, _env_int("LLM_CONTENT_BATCH_SIZE", default=8)),
@@ -62,6 +64,8 @@ class LLMConfig:
         )
 
     def max_new_tokens_for_task(self, task: str) -> int:
+        if task == "semantic_enrichment" and self.semantic_max_new_tokens is not None:
+            return self.semantic_max_new_tokens
         if task == "content_repair" and self.content_max_new_tokens is not None:
             return self.content_max_new_tokens
         return self.max_new_tokens
@@ -215,12 +219,38 @@ class LocalTransformersLLMClient:
 
     @staticmethod
     def _build_prompt(task: str, payload: dict[str, Any]) -> str:
+        if task == "semantic_enrichment":
+            return LocalTransformersLLMClient._build_semantic_enrichment_prompt(payload)
         if task == "content_repair":
             return LocalTransformersLLMClient._build_content_repair_prompt(payload)
 
         return (
             f"작업: {task}\n"
             "요청 schema 정확히 준수. 원문 의미 보존.\n"
+            f"입력 JSON:\n{json.dumps(payload, ensure_ascii=False)}"
+        )
+
+    @staticmethod
+    def _build_semantic_enrichment_prompt(payload: dict[str, Any]) -> str:
+        return (
+            "작업: semantic_enrichment\n"
+            "역할: OCR/PDF layout 결과에서 제목, 본문, 캡션, 주석 후보를 재분류.\n"
+            "출력은 반드시 JSON 객체 하나만 반환.\n"
+            '출력 형식: {"semantic_decisions":[{"id":"...","kind":"text|heading|caption|note","heading_level":null,"confidence":0.0}],"caption_links":[{"caption_id":"...","target_id":"...","confidence":0.0}]}\n'
+            "semantic_decisions에는 kind 또는 heading_level을 바꿀 필요가 있는 후보만 포함.\n"
+            "제목 판단 기준:\n"
+            "- 1., 1.2, 1.2.3 같은 번호 제목은 heading 후보.\n"
+            "- 번호 depth 기준 heading_level: 1.은 1, 1.2는 2, 1.2.3은 3.\n"
+            "- 입력 candidate의 semantic_hint와 semantic_reason은 휴리스틱 참고값이며, 최종 판단은 text 기준.\n"
+            "- 짧고 명사구에 가까운 줄은 제목일 수 있음.\n"
+            "- 마침표로 끝나는 긴 설명문, 완전한 본문 문장은 text 유지.\n"
+            "- 표/그림 설명처럼 '표 1', 'Figure 2', '그림 3'으로 시작하면 caption 후보.\n"
+            "- 확신이 낮으면 해당 후보는 응답에서 제외.\n"
+            "예시:\n"
+            "- 1.2 범위 및 제약사항 -> kind=heading, heading_level=2\n"
+            "- 3.1 테일러 급수 전개 (공학 함수 근사) -> kind=heading, heading_level=2\n"
+            "- 5. 비기능 요구사항 (Non-Functional Requirements) -> kind=heading, heading_level=1\n"
+            "- 본 문서는 웹 기반 계산기 애플리케이션의 요구사항을 정의합니다. -> kind=text, 응답 제외\n"
             f"입력 JSON:\n{json.dumps(payload, ensure_ascii=False)}"
         )
 

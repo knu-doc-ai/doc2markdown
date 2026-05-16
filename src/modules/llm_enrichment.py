@@ -9,6 +9,7 @@ LLM 출력은 block role 승격 또는 공백 보정에만 사용.
 
 import re
 import time
+from collections import Counter
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -39,6 +40,13 @@ SEMANTIC_TASK = "semantic_enrichment"
 CONTENT_TASK = "content_repair"
 URL_PATTERN = re.compile(r"(?:https?://|www\.|[\w.-]+@[\w.-]+)", re.IGNORECASE)
 MARKDOWN_TABLE_LINE_PATTERN = re.compile(r"^\s*\|.*\|\s*$")
+SEMANTIC_NUMERIC_HEADING_PATTERN = re.compile(r"^\s*\d+(?:\.\d+)*[.)]?\s+\S+")
+SEMANTIC_CAPTION_PATTERN = re.compile(r"^\s*(?:table|tbl\.?|figure|fig\.?|표|그림)\s*\d+", re.IGNORECASE)
+SEMANTIC_NOTE_PATTERN = re.compile(r"^\s*(?:note\b|note:|source:|비고|주의|주\s*:)", re.IGNORECASE)
+SEMANTIC_TERMINAL_PUNCTUATION = tuple(".!?;:。！？")
+SEMANTIC_TITLE_MAX_CHARS = 90
+SEMANTIC_TITLE_MAX_WORDS = 12
+SEMANTIC_HEADING_HEIGHT_RATIO = 1.15
 
 
 @dataclass(frozen=True)
@@ -66,6 +74,10 @@ class SemanticEnricher:
             "semantic_enabled": True,
             "model": client.model_id,
             "enrichment_mode": self.config.mode,
+            "eligible_candidate_count": 0,
+            "llm_candidate_count": 0,
+            "skipped_candidate_count": 0,
+            "candidate_reason_counts": {},
             "decision_count": 0,
             "applied_decision_count": 0,
             "caption_link_count": 0,
@@ -73,11 +85,21 @@ class SemanticEnricher:
         }
 
         payload = self._build_semantic_payload(result)
+        candidate_stats = payload.get("candidate_stats") or {}
+        summary["eligible_candidate_count"] = candidate_stats.get("eligible_count", 0)
+        summary["llm_candidate_count"] = candidate_stats.get("included_count", len(payload["candidates"]))
+        summary["skipped_candidate_count"] = candidate_stats.get("skipped_count", 0)
+        summary["candidate_reason_counts"] = candidate_stats.get("reason_counts", {})
         print(
             f"[LLM][Semantic] 시작: model={client.model_id}, "
-            f"candidates={len(payload['candidates'])}, objects={len(payload['objects'])}, "
-            f"max_new_tokens={self.config.max_new_tokens}"
+            f"candidates={len(payload['candidates'])}/{summary['eligible_candidate_count']}, "
+            f"skipped={summary['skipped_candidate_count']}, objects={len(payload['objects'])}, "
+            f"max_new_tokens={self.config.max_new_tokens_for_task(SEMANTIC_TASK)}"
         )
+        if not payload["candidates"]:
+            print("[LLM][Semantic] 후보 없음: LLM 호출 건너뜀")
+            return self._with_metadata_and_warnings(result, summary, warnings)
+
         started_at = time.perf_counter()
         try:
             response = client.generate_json(SEMANTIC_TASK, payload)
@@ -135,21 +157,22 @@ class SemanticEnricher:
 
     @staticmethod
     def _build_semantic_payload(result: AssemblyResult) -> dict[str, Any]:
-        candidates = [
-            {
-                "id": element.id,
-                "page": element.page,
-                "kind": element.kind,
-                "text": element.text,
-                "bbox": element.bbox,
-                "confidence": element.confidence,
-                "column_id": element.column_id,
-                "reading_order": element.reading_order,
-                "label": element.label,
-            }
+        page_stats_by_page = {page_stat.page: page_stat for page_stat in result.page_stats}
+        eligible_elements = [
+            element
             for element in result.ordered_elements
             if element.kind in ALLOWED_SEMANTIC_KINDS and element.text
         ]
+        candidates = [
+            candidate
+            for element in eligible_elements
+            for candidate in [SemanticEnricher._build_semantic_candidate(element, page_stats_by_page.get(element.page))]
+            if candidate is not None
+        ]
+        reason_counts = Counter(
+            candidate.get("semantic_reason", "unknown")
+            for candidate in candidates
+        )
         objects = [
             {
                 "target_id": table_ref.table_id,
@@ -177,7 +200,102 @@ class SemanticEnricher:
             "candidates": candidates,
             "objects": objects,
             "page_stats": [page_stat.to_dict() for page_stat in result.page_stats],
+            "candidate_stats": {
+                "eligible_count": len(eligible_elements),
+                "included_count": len(candidates),
+                "skipped_count": max(0, len(eligible_elements) - len(candidates)),
+                "reason_counts": dict(reason_counts),
+            },
         }
+
+    @staticmethod
+    def _build_semantic_candidate(element: AssemblyElement, page_stat: Any | None) -> dict[str, Any] | None:
+        text = (element.text or "").strip()
+        if not text:
+            return None
+
+        reason, hint = SemanticEnricher._semantic_candidate_hint(element, text, page_stat)
+        if reason is None:
+            return None
+
+        candidate = {
+            "id": element.id,
+            "page": element.page,
+            "kind": element.kind,
+            "text": element.text,
+            "bbox": element.bbox,
+            "confidence": element.confidence,
+            "column_id": element.column_id,
+            "reading_order": element.reading_order,
+            "label": element.label,
+            "semantic_hint": hint,
+            "semantic_reason": reason,
+            "text_length": len(text),
+            "non_space_length": len(ContentEnricher._non_space_signature(text)),
+        }
+
+        height_ratio = SemanticEnricher._height_to_body_ratio(element, page_stat)
+        if height_ratio is not None:
+            candidate["height_to_body_ratio"] = round(height_ratio, 3)
+        return candidate
+
+    @staticmethod
+    def _semantic_candidate_hint(element: AssemblyElement, text: str, page_stat: Any | None) -> tuple[str | None, str | None]:
+        if element.kind in {"heading", "caption", "note"}:
+            return "existing_kind", element.kind
+
+        label = (element.label or "").lower()
+        if "caption" in label:
+            return "label_caption", "caption"
+        if "title" in label or "header" in label or "heading" in label:
+            return "label_heading", "heading"
+
+        if SEMANTIC_CAPTION_PATTERN.match(text):
+            return "caption_pattern", "caption"
+        if SEMANTIC_NOTE_PATTERN.match(text):
+            return "note_pattern", "note"
+        if SEMANTIC_NUMERIC_HEADING_PATTERN.match(text):
+            return "numeric_heading_pattern", "heading"
+
+        height_ratio = SemanticEnricher._height_to_body_ratio(element, page_stat)
+        if height_ratio is not None and height_ratio >= SEMANTIC_HEADING_HEIGHT_RATIO and SemanticEnricher._is_short_title_like(text):
+            return "height_title_like", "heading"
+
+        if SemanticEnricher._is_short_title_like(text):
+            return "short_title_like", "heading"
+
+        return None, None
+
+    @staticmethod
+    def _is_short_title_like(text: str) -> bool:
+        normalized = " ".join(text.strip().split())
+        if not normalized:
+            return False
+        if len(normalized) > SEMANTIC_TITLE_MAX_CHARS:
+            return False
+        if normalized.endswith(SEMANTIC_TERMINAL_PUNCTUATION):
+            return False
+        if len(normalized.split()) > SEMANTIC_TITLE_MAX_WORDS:
+            return False
+        if URL_PATTERN.search(normalized) or "`" in normalized:
+            return False
+        return True
+
+    @staticmethod
+    def _height_to_body_ratio(element: AssemblyElement, page_stat: Any | None) -> float | None:
+        if element.bbox is None or page_stat is None:
+            return None
+        body_font_size = getattr(page_stat, "body_font_size", None)
+        if body_font_size is None:
+            return None
+        try:
+            baseline = float(body_font_size)
+        except (TypeError, ValueError):
+            return None
+        if baseline <= 0:
+            return None
+        height = max(0.0, float(element.bbox[3]) - float(element.bbox[1]))
+        return height / baseline
 
     def _apply_decisions(
         self,

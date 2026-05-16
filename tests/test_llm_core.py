@@ -91,6 +91,7 @@ class LocalTransformersLLMClientTests(unittest.TestCase):
             LLMConfig(
                 model_id="fake-local-llm",
                 max_new_tokens=7,
+                semantic_max_new_tokens=13,
                 content_max_new_tokens=11,
             )
         )
@@ -100,6 +101,24 @@ class LocalTransformersLLMClientTests(unittest.TestCase):
         client.generate_json("content_repair", {"items": []})
 
         self.assertEqual(model.generate_kwargs["max_new_tokens"], 11)
+
+    def test_semantic_task_uses_semantic_max_new_tokens(self):
+        tokenizer = FakeTokenizer()
+        model = FakeModel()
+        client = LocalTransformersLLMClient(
+            LLMConfig(
+                model_id="fake-local-llm",
+                max_new_tokens=7,
+                semantic_max_new_tokens=13,
+                content_max_new_tokens=11,
+            )
+        )
+        client._tokenizer = tokenizer
+        client._model = model
+
+        client.generate_json("semantic_enrichment", {"candidates": []})
+
+        self.assertEqual(model.generate_kwargs["max_new_tokens"], 13)
 
     def test_non_content_task_uses_general_max_new_tokens(self):
         tokenizer = FakeTokenizer()
@@ -117,6 +136,16 @@ class LocalTransformersLLMClientTests(unittest.TestCase):
         client.generate_json("semantic_enrichment", {"items": []})
 
         self.assertEqual(model.generate_kwargs["max_new_tokens"], 7)
+
+    def test_semantic_prompt_mentions_heading_rules_and_examples(self):
+        prompt = LocalTransformersLLMClient._build_prompt("semantic_enrichment", {"candidates": [], "objects": []})
+
+        self.assertIn("semantic_enrichment", prompt)
+        self.assertIn("semantic_decisions", prompt)
+        self.assertIn("caption_links", prompt)
+        self.assertIn("heading_level", prompt)
+        self.assertIn("1.2", prompt)
+        self.assertIn("Non-Functional Requirements", prompt)
 
     def test_content_prompt_mentions_ocr_spacing_examples(self):
         prompt = LocalTransformersLLMClient._build_prompt("content_repair", {"items": []})
