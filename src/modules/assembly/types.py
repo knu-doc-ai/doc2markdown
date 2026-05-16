@@ -52,6 +52,11 @@ AssemblyWarningCode = Literal[
     "structure_orphan_block",  # 구조 트리에 귀속되지 못한 block을 찾은 경우
     "missing_geometry",  # bbox 같은 기하 정보가 빠진 block/ref를 찾은 경우
     "low_confidence_chunk",  # 필터링 후에도 남아 있는 저신뢰 chunk를 표시하는 경우
+    "llm_semantic_failed",
+    "llm_semantic_unknown_block",
+    "llm_caption_link_unknown_caption",
+    "llm_content_failed",
+    "llm_content_preservation_failed",
 ]
 
 AssemblyStage = Literal[

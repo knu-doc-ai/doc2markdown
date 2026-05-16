@@ -9,13 +9,17 @@ from modules.assembly.ir import AssemblyResult
 from modules.assembly.normalize_filter import NormalizeFilter
 from modules.assembly.structure import StructureAssembler
 from modules.assembly.validator import AssemblyValidator
+from modules.llm_core import LLMConfig
+from modules.llm_enrichment import ContentEnricher, SemanticEnricher
 
 
 ASSEMBLY_STAGE_OUTPUTS = [
     ("adapter_seed", "01_adapter_seed.json"),
     ("normalized", "02_normalized.json"),
-    ("structure_assembled", "03_structure_assembled.json"),
-    ("validated", "04_validated.json"),
+    ("semantic_enriched", "03_semantic_enriched.json"),
+    ("structure_assembled", "04_structure_assembled.json"),
+    ("content_enriched", "05_content_enriched.json"),
+    ("validated", "06_validated.json"),
 ]
 
 
@@ -71,12 +75,20 @@ def build_stage_results_from_outputs(
         }
     )
     normalized_result = NormalizeFilter.apply(seed_result)
-    structure_result = StructureAssembler.apply(normalized_result)
-    validated_result = AssemblyValidator.apply(structure_result)
+    config = LLMConfig.from_env()
+    semantic_result = SemanticEnricher(config=config).apply(normalized_result)
+    structure_result = StructureAssembler.apply(semantic_result)
+    content_result = ContentEnricher(config=config).apply(structure_result)
+    validated_result = AssemblyValidator.apply(content_result)
 
-    return {
+    stage_results = {
         "adapter_seed": seed_result,
         "normalized": normalized_result,
         "structure_assembled": structure_result,
         "validated": validated_result,
     }
+    if config.runs_semantic():
+        stage_results["semantic_enriched"] = semantic_result
+    if config.runs_content():
+        stage_results["content_enriched"] = content_result
+    return stage_results

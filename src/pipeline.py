@@ -1,8 +1,9 @@
 import json
 import os
+import time
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import torch
 from dotenv import load_dotenv
@@ -12,6 +13,12 @@ from modules.vision_engine import LayoutAnalyzer
 from modules.text_extractor import TextExtractor
 from modules.assembler import DocumentAssembler
 from modules.renderer import MarkdownRenderer
+from modules.assembly.adapters import AssemblyInputAdapter
+from modules.assembly.normalize_filter import NormalizeFilter
+from modules.assembly.structure import StructureAssembler
+from modules.assembly.validator import AssemblyValidator
+from modules.llm_core import LLMConfig
+from modules.llm_enrichment import ContentEnricher, SemanticEnricher
 
 load_dotenv()
 
@@ -36,6 +43,8 @@ class DocumentToMarkdownPipeline:
         table_extractor: Optional[Any] = None,
         assembler: Optional[Any] = None,
         renderer: Optional[Any] = None,
+        semantic_enricher: Optional[Any] = None,
+        content_enricher: Optional[Any] = None,
         project_root: Optional[str] = None,
     ):
         self.project_root = Path(project_root).resolve() if project_root else Path(__file__).resolve().parents[1]
@@ -49,9 +58,13 @@ class DocumentToMarkdownPipeline:
         self.table_extractor = table_extractor or self._create_table_extractor()
         self.assembler = assembler or DocumentAssembler()
         self.renderer = renderer or MarkdownRenderer()
+        self.llm_config = LLMConfig.from_env()
+        self._print_llm_config()
+        self.semantic_enricher = semantic_enricher or SemanticEnricher(config=self.llm_config)
+        self.content_enricher = content_enricher or ContentEnricher(config=self.llm_config)
 
     def run_until_assembly(self, file_path: str) -> Dict[str, Any]:
-        """조립 단계까지 실행하고 중간 산출물도 함께 저장한다."""
+        """조립 단계까지 실행 및 중간 산출물 저장."""
         resolved_file_path = Path(file_path).resolve()
         output_dir = self._get_output_dir(resolved_file_path)
 
@@ -79,7 +92,7 @@ class DocumentToMarkdownPipeline:
         self._save_json(output_dir / "table_results.json", table_result)
 
         print("▶ [Step 5] 문서 조립 중...")
-        assembly_result = self.assembler.build_from_outputs(extracted_result, table_result)
+        assembly_result = self._build_assembly_with_optional_enrichment(extracted_result, table_result)
         assembly_result_dict = self._serialize(assembly_result)
         self._save_json(output_dir / "assembly_result.json", assembly_result_dict)
 
@@ -94,7 +107,7 @@ class DocumentToMarkdownPipeline:
         }
 
     def run(self, file_path: str, render_markdown: bool = True) -> Dict[str, Any]:
-        """전체 파이프라인을 실행하고 최종 Markdown까지 저장한다."""
+        """전체 파이프라인 실행 및 최종 Markdown 저장."""
         result = self.run_until_assembly(file_path=file_path)
 
         if render_markdown and self.renderer is not None:
@@ -114,7 +127,7 @@ class DocumentToMarkdownPipeline:
         return result
 
     def _build_table_results(self, layout_result: Dict[str, Any]) -> list[Dict[str, Any]]:
-        """레이아웃 결과의 표 crop을 순회하며 Markdown 표 결과를 만든다."""
+        """레이아웃 결과의 표 crop 순회 및 Markdown 표 결과 생성."""
         table_results = []
 
         for page in layout_result.get("pages", []):
@@ -153,8 +166,47 @@ class DocumentToMarkdownPipeline:
 
         return table_results
 
+    def _build_assembly_with_optional_enrichment(self, layout_result: Any, table_result: Any):
+        """선택형 로컬 LLM 보강 단계를 포함한 Assembly IR 생성."""
+        seed_result = self._run_assembly_stage(
+            "adapter_seed",
+            lambda: AssemblyInputAdapter.from_outputs(layout_result, table_result),
+        )
+        normalized_result = self._run_assembly_stage(
+            "NormalizeFilter",
+            lambda: NormalizeFilter.apply(seed_result),
+        )
+
+        if self.llm_config.runs_semantic():
+            semantic_result = self._run_assembly_stage(
+                "SemanticEnricher",
+                lambda: self.semantic_enricher.apply(normalized_result),
+            )
+        else:
+            print(f"[Pipeline][Assembly] SemanticEnricher 건너뜀: mode={self.llm_config.mode}")
+            semantic_result = self.semantic_enricher.apply(normalized_result)
+
+        structure_result = self._run_assembly_stage(
+            "StructureAssembler",
+            lambda: StructureAssembler.apply(semantic_result),
+        )
+
+        if self.llm_config.runs_content():
+            content_result = self._run_assembly_stage(
+                "ContentEnricher",
+                lambda: self.content_enricher.apply(structure_result),
+            )
+        else:
+            print(f"[Pipeline][Assembly] ContentEnricher 건너뜀: mode={self.llm_config.mode}")
+            content_result = self.content_enricher.apply(structure_result)
+
+        return self._run_assembly_stage(
+            "AssemblyValidator",
+            lambda: AssemblyValidator.apply(content_result),
+        )
+
     def _build_table_id(self, page_num: int, raw_element_id: Any) -> str:
-        """Assembly 어댑터와 같은 규칙의 table id를 만든다."""
+        """Assembly 어댑터와 같은 규칙의 table id 생성."""
         if isinstance(raw_element_id, int):
             return f"p{page_num}_table_{raw_element_id}"
 
@@ -166,13 +218,15 @@ class DocumentToMarkdownPipeline:
         return f"p{page_num}_table_unknown"
 
     def _get_output_dir(self, file_path: Path) -> Path:
-        """프로젝트 루트 기준 출력 디렉터리를 반환한다."""
+        """프로젝트 루트 기준 출력 디렉터리 반환."""
         output_dir = self.output_base_dir / file_path.stem
+        if self.llm_config.uses_enrichment():
+            output_dir = output_dir / "llm_enrichment" / self.llm_config.mode
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir
 
     def _create_table_extractor(self):
-        """환경변수에 따라 표 추출 실행 방식을 고른다."""
+        """환경변수 기준 표 추출 실행 방식 선택."""
         if self._uses_direct_table_extraction():
             print("[Pipeline] TABLE_EXTRACTION_MODE=direct")
             table_module = import_module("modules.Table_to_markdown")
@@ -183,18 +237,66 @@ class DocumentToMarkdownPipeline:
         return table_module.TableExtractor()
 
     def _uses_direct_table_extraction(self) -> bool:
-        """표 추출을 현재 프로세스에서 직접 실행할지 여부를 반환한다."""
+        """표 추출의 현재 프로세스 직접 실행 여부 반환."""
         return self.table_extraction_mode == "direct"
 
+    def _run_assembly_stage(self, label: str, action: Callable[[], Any]) -> Any:
+        """Assembly 세부 단계 실행 로그 출력."""
+        print(f"[Pipeline][Assembly] {label} 시작")
+        started_at = time.perf_counter()
+        result = action()
+        self._print_assembly_stage_summary(label, result, started_at)
+        return result
+
+    def _print_assembly_stage_summary(self, label: str, result: Any, started_at: float) -> None:
+        """Assembly 세부 단계 요약 로그 출력."""
+        elapsed = time.perf_counter() - started_at
+        metadata = getattr(result, "metadata", None)
+        stage = getattr(metadata, "stage", None) or "-"
+        elements = getattr(result, "ordered_elements", []) or []
+        warnings = getattr(result, "warnings", []) or []
+        document = getattr(result, "document", None)
+
+        print(
+            f"[Pipeline][Assembly] {label} 완료: "
+            f"stage={stage}, elements={len(elements)}, warnings={len(warnings)}, elapsed={elapsed:.2f}s"
+        )
+        if document is None:
+            return
+
+        children = getattr(document, "children", []) or []
+        sections = getattr(document, "sections", []) or []
+        table_refs = getattr(document, "table_refs", []) or []
+        figure_refs = getattr(document, "figure_refs", []) or []
+        print(
+            f"[Pipeline][Assembly] {label} document: "
+            f"children={len(children)}, sections={len(sections)}, "
+            f"tables={len(table_refs)}, figures={len(figure_refs)}"
+        )
+
+    def _print_llm_config(self) -> None:
+        """로컬 LLM 후처리 설정 로그 출력."""
+        if not self.llm_config.uses_enrichment():
+            print("[Pipeline] LLM enrichment disabled: baseline")
+            return
+
+        print(f"[Pipeline] LLM_ENRICHMENT_MODE={self.llm_config.mode}")
+        print(f"[Pipeline] LOCAL_LLM_MODEL_ID={self.llm_config.model_id}")
+        print(f"[Pipeline] LLM_MAX_NEW_TOKENS={self.llm_config.max_new_tokens}")
+        print(f"[Pipeline] LLM_SEMANTIC_MAX_NEW_TOKENS={self.llm_config.max_new_tokens_for_task('semantic_enrichment')}")
+        print(f"[Pipeline] LLM_CONTENT_MAX_NEW_TOKENS={self.llm_config.max_new_tokens_for_task('content_repair')}")
+        print(f"[Pipeline] LLM_CONTENT_BATCH_SIZE={self.llm_config.content_batch_size}")
+        print(f"[Pipeline] LLM_CONTENT_MIN_CHARS={self.llm_config.content_min_chars}")
+
     def _save_json(self, path: Path, payload: Any) -> None:
-        """UTF-8 JSON 파일로 저장한다."""
+        """UTF-8 JSON 파일 저장."""
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as file:
             serialized_payload = self._strip_raw_fields(self._serialize(payload))
             json.dump(serialized_payload, file, ensure_ascii=False, indent=2)
 
     def _release_vision_gpu_memory(self) -> None:
-        """레이아웃 분석이 끝난 뒤 비전 모델 GPU 메모리를 정리한다."""
+        """레이아웃 분석 후 비전 모델 GPU 메모리 정리."""
         if not torch.cuda.is_available():
             return
 
@@ -209,7 +311,7 @@ class DocumentToMarkdownPipeline:
         torch.cuda.empty_cache()
 
     def _collect_temp_image_paths(self, ingestion_result: Dict[str, Any]) -> list[Path]:
-        """이번 실행에서 생성된 temp 페이지 이미지 경로만 수집한다."""
+        """이번 실행에서 생성된 temp 페이지 이미지 경로만 수집."""
         collected_paths = []
 
         for page in ingestion_result.get("pages", []):
@@ -228,7 +330,7 @@ class DocumentToMarkdownPipeline:
         return collected_paths
 
     def _cleanup_temp_images(self, image_paths: list[Path]) -> None:
-        """이번 실행에서 만든 temp 페이지 이미지만 삭제한다."""
+        """이번 실행에서 만든 temp 페이지 이미지만 삭제."""
         deleted_count = 0
 
         for image_path in image_paths:
@@ -250,7 +352,7 @@ class DocumentToMarkdownPipeline:
         return value
 
     def _strip_raw_fields(self, value: Any) -> Any:
-        """저장용 JSON에서는 과도하게 커지는 raw 필드를 제거한다."""
+        """저장용 JSON의 과도한 raw 필드 제거."""
         if isinstance(value, dict):
             return {
                 key: self._strip_raw_fields(item)
@@ -265,7 +367,7 @@ class DocumentToMarkdownPipeline:
 
 
 if __name__ == "__main__":
-    sample_file = Path(__file__).resolve().parents[1] / "data" / "raw" / "sample_lg_report.pdf"
+    sample_file = Path(__file__).resolve().parents[1] / "data" / "raw" / "calculator_srs_final.pdf"
 
     pipeline = DocumentToMarkdownPipeline()
     if sample_file.exists():

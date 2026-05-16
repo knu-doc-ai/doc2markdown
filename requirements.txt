@@ -15,7 +15,7 @@ unstructured>=0.12.5
 # 3. 이미지 처리 및 컴퓨터 비전 (Vision AI)
 Pillow>=10.2.0
 ultralytics>=8.1.0
-huggingface_hub>=0.20.0  # 모델 다운로드용
+huggingface_hub[hf_xet]>=0.20.0  # 모델 다운로드용
 dill>=0.3.7
 opencv-python==4.9.0.80
 timm>=0.9.0
@@ -23,10 +23,10 @@ timm>=0.9.0
 # 4. 데이터 조작 및 표(Table) 처리
 pandas>=2.2.1
 numpy>=1.26.4,<2.0.0
-transformers>=4.35.0
+transformers>=4.51.0
 easyocr>=1.7.1
 accelerate>=0.26.0
-huggingface_hub[hf_xet]>=0.20.0
+safetensors>=0.4.5
 
 # 5. 사용자 인터페이스 & 백엔드 API (Output Layer & UI)
 fastapi>=0.110.0

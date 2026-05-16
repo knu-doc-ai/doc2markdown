@@ -895,6 +895,10 @@ class StructureAssembler(AssemblyCommonMixin):
         """문자 패턴과 block 높이를 같이 보고 heading level을 추정한다."""
         # R-ASM-08
         # 숫자/괄호 패턴이 있으면 우선 사용하고, 없으면 body 대비 높이로 보정한다.
+        llm_heading_level = cls._normalize_heading_level_hint(element.metadata.get("llm_heading_level"))
+        if llm_heading_level is not None:
+            return llm_heading_level
+
         text = cls._normalize_text(element.text) or ""
 
         numeric_match = cls.NUMERIC_HEADING_PATTERN.match(text)
@@ -921,6 +925,9 @@ class StructureAssembler(AssemblyCommonMixin):
     @classmethod
     def _infer_heading_level_source(cls, element: AssemblyElement, page_stat: Optional[PageStats]) -> str:
         """level 추정 근거를 metadata에 남긴다."""
+        if cls._normalize_heading_level_hint(element.metadata.get("llm_heading_level")) is not None:
+            return "llm_hint"
+
         text = cls._normalize_text(element.text) or ""
         if cls.NUMERIC_HEADING_PATTERN.match(text):
             return "numeric_pattern"
@@ -931,6 +938,15 @@ class StructureAssembler(AssemblyCommonMixin):
         if cls._bbox_height(element) is not None and page_stat and page_stat.body_font_size is not None:
             return "height_ratio"
         return "default"
+
+    @staticmethod
+    def _normalize_heading_level_hint(value: Any) -> Optional[int]:
+        """LLM heading level hint의 Markdown 안전 범위 정규화."""
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            return None
+        return max(1, min(6, normalized))
 
     @classmethod
     def _effective_section_level(cls, section: SectionNode) -> int:
