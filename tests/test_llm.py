@@ -11,8 +11,7 @@ from modules.assembly.ir import (
     ParagraphGroup,
     TableRef,
 )
-from modules.llm_core import LLMConfig
-from modules.llm_enrichment import ContentEnricher, SemanticEnricher
+from modules.assembly.stages.enrichment import ContentEnricher, LLMConfig, SemanticEnricher
 
 
 def enabled_config(mode):

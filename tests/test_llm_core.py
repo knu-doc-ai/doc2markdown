@@ -2,7 +2,8 @@ import unittest
 
 from tests import _helpers  # noqa: F401
 
-from modules.llm_core import LLMConfig, LocalTransformersLLMClient
+from modules.assembly.stages.enrichment import LLMConfig, LocalTransformersLLMClient
+from modules.assembly.stages.enrichment.prompts import build_prompt
 
 
 class FakeTensor:
@@ -132,7 +133,7 @@ class LocalTransformersLLMClientTests(unittest.TestCase):
         self.assertEqual(model.generate_kwargs["max_new_tokens"], 7)
 
     def test_semantic_prompt_mentions_heading_rules_and_examples(self):
-        prompt = LocalTransformersLLMClient._build_prompt("semantic_enrichment", {"candidates": [], "objects": []})
+        prompt = build_prompt("semantic_enrichment", {"candidates": [], "objects": []})
 
         self.assertIn("semantic_enrichment", prompt)
         self.assertIn("semantic_decisions", prompt)
@@ -142,7 +143,7 @@ class LocalTransformersLLMClientTests(unittest.TestCase):
         self.assertIn("Non-Functional Requirements", prompt)
 
     def test_content_prompt_mentions_ocr_spacing_examples(self):
-        prompt = LocalTransformersLLMClient._build_prompt("content_repair", {"items": []})
+        prompt = build_prompt("content_repair", {"items": []})
 
         self.assertIn("OCR/PDF", prompt)
         self.assertIn("모든 입력 item", prompt)

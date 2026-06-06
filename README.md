@@ -30,7 +30,7 @@ doc2markdown/
 │   ├── modules/                # 핵심 AI 엔진 모듈
 │   │   ├── ingestion.py        # [1. Input Layer] PDF 파싱 및 전처리
 │   │   ├── vision_engine.py    # [2. Visual Analysis] 문서 구조 분석 및 영역 분리 (제목, 다단, 표, 그림)
-│   │   ├── llm_core.py         # [3. AI Agent Core] 표 변환(MD Table), 본문 정제, Alt-text 생성
+│   │   ├── assembly/stages/enrichment/ # [3. AI Agent Core] Assembly IR LLM 보강
 │   │   └── assembler.py        # [4. Output Layer] 최종 마크다운 조립
 │   │
 │   ├── utils/                  # 🛠 공통 유틸리티

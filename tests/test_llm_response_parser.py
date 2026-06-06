@@ -2,7 +2,11 @@ import unittest
 
 from tests import _helpers  # noqa: F401
 
-from modules.llm_response_parser import parse_content_repair, parse_content_repairs, parse_semantic_response
+from modules.assembly.stages.enrichment.response_parser import (
+    parse_content_repair,
+    parse_content_repairs,
+    parse_semantic_response,
+)
 
 
 class SemanticResponseParserTests(unittest.TestCase):

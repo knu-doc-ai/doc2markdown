@@ -12,8 +12,6 @@ from modules.vision_engine import LayoutAnalyzer
 from modules.text_extractor import TextExtractor
 from modules.assembly.service import DocumentAssembler
 from modules.rendering.service import MarkdownRenderer
-from modules.llm_core import LLMConfig
-from modules.llm_enrichment import ContentEnricher, SemanticEnricher
 
 load_dotenv()
 
@@ -55,11 +53,9 @@ class DocumentToMarkdownPipeline:
         self.table_extractor = None if self._skips_table_extraction() else table_extractor or self._create_table_extractor()
         self.assembler = assembler or DocumentAssembler()
         self.renderer = renderer or MarkdownRenderer()
-        self.llm_config = LLMConfig.from_env()
         self._print_table_config()
-        self._print_llm_config()
-        self.semantic_enricher = semantic_enricher or SemanticEnricher(config=self.llm_config)
-        self.content_enricher = content_enricher or ContentEnricher(config=self.llm_config)
+        self.semantic_enricher = semantic_enricher
+        self.content_enricher = content_enricher
 
     def run_until_assembly(self, file_path: str) -> Dict[str, Any]:
         """조립 단계까지 실행 및 중간 산출물 저장."""
@@ -90,7 +86,7 @@ class DocumentToMarkdownPipeline:
         self._save_json(output_dir / "table_results.json", table_result)
 
         print("[Pipeline] 5/6 Assembly IR build + LLM enrich")
-        assembly_result = self._build_assembly_ir(extracted_result, table_result)
+        assembly_result = self._build_assembly_result(extracted_result, table_result)
         assembly_result_dict = self._serialize(assembly_result)
         self._save_json(output_dir / "assembly_result.json", assembly_result_dict)
 
@@ -161,8 +157,8 @@ class DocumentToMarkdownPipeline:
 
         return table_results
 
-    def _build_assembly_ir(self, layout_result: Any, table_result: Any) -> Any:
-        """Build Assembly IR through the assembly module, including optional LLM enrichment."""
+    def _build_assembly_result(self, layout_result: Any, table_result: Any) -> Any:
+        """assembly 모듈을 통해 선택적 LLM 보강을 포함한 Assembly IR을 만든다."""
         trace = self.assembler.build_from_outputs_with_trace(
             layout_result,
             table_result,
@@ -199,10 +195,21 @@ class DocumentToMarkdownPipeline:
     def _get_output_dir(self, file_path: Path) -> Path:
         """프로젝트 루트 기준 출력 디렉터리 반환."""
         output_dir = self.output_base_dir / file_path.stem
-        if self.llm_config.uses_enrichment():
-            output_dir = output_dir / "llm_enrichment" / self.llm_config.mode
+        assembly_output_subdir = self._get_assembly_output_subdir()
+        if assembly_output_subdir is not None:
+            output_dir = output_dir / assembly_output_subdir
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir
+
+    def _get_assembly_output_subdir(self) -> Path | None:
+        provider = getattr(self.assembler, "get_output_subdir", None)
+        if not callable(provider):
+            return None
+
+        subdir = provider()
+        if subdir is None:
+            return None
+        return Path(subdir)
 
     def _create_table_extractor(self):
         """환경변수 기준 표 추출 실행 방식 선택."""
@@ -229,20 +236,6 @@ class DocumentToMarkdownPipeline:
         print(f"[Pipeline][Config] TABLE_EXTRACTION_MODE={self.table_extraction_mode}")
         print(f"[Pipeline][Config] TABLE_EXTRACTION_ENABLED={self.table_extraction_enabled}")
         print(f"[Pipeline][Config] TABLE_EXTRACTION_FORCE_FALLBACK={self.force_table_extraction_fallback}")
-
-    def _print_llm_config(self) -> None:
-        """로컬 LLM 후처리 설정 로그 출력."""
-        if not self.llm_config.uses_enrichment():
-            print("[Pipeline][Config] LLM_ENRICHMENT_MODE=baseline (disabled)")
-            return
-
-        print(f"[Pipeline][Config] LLM_ENRICHMENT_MODE={self.llm_config.mode}")
-        print(f"[Pipeline][Config] LOCAL_LLM_MODEL_ID={self.llm_config.model_id}")
-        print(f"[Pipeline][Config] LLM_MAX_NEW_TOKENS={self.llm_config.max_new_tokens}")
-        print(f"[Pipeline][Config] LLM_SEMANTIC_MAX_NEW_TOKENS={self.llm_config.max_new_tokens_for_task('semantic_enrichment')}")
-        print(f"[Pipeline][Config] LLM_CONTENT_MAX_NEW_TOKENS={self.llm_config.max_new_tokens_for_task('content_repair')}")
-        print(f"[Pipeline][Config] LLM_CONTENT_BATCH_SIZE={self.llm_config.content_batch_size}")
-        print(f"[Pipeline][Config] LLM_CONTENT_MIN_CHARS={self.llm_config.content_min_chars}")
 
     def _save_json(self, path: Path, payload: Any) -> None:
         """UTF-8 JSON 파일 저장."""
