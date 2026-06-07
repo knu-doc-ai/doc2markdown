@@ -15,10 +15,10 @@ class _FakeEnricherConfig:
         self._semantic = semantic
         self._content = content
 
-    def runs_semantic(self):
+    def enables_semantic(self):
         return self._semantic
 
-    def runs_content(self):
+    def enables_content(self):
         return self._content
 
 

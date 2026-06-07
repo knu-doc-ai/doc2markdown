@@ -2,7 +2,11 @@ import unittest
 
 from tests import _helpers  # noqa: F401
 
-from modules.llm_response_parser import parse_content_repair, parse_content_repairs, parse_semantic_response
+from modules.assembly.stages.enrichment.response_parser import (
+    parse_content_repair,
+    parse_content_repairs,
+    parse_semantic_response,
+)
 
 
 class SemanticResponseParserTests(unittest.TestCase):
@@ -81,14 +85,17 @@ class ContentRepairParserTests(unittest.TestCase):
         repairs = parse_content_repairs(
             {
                 "repairs": [
-                    {"node_id": "p1", "text": "첫 번째 문장", "confidence": 0.9},
+                    {"node_id": "p1", "text": "첫 번째 문장"},
                     {"node_id": "p2", "text": "두 번째 문장", "confidence": "0.8"},
                     {"node_id": "p3", "text": "낮은 신뢰도", "confidence": 0.4},
                 ]
             }
         )
 
-        self.assertEqual([repair.node_id for repair in repairs], ["p1", "p2"])
+        self.assertEqual([repair.node_id for repair in repairs], ["p1", "p2", "p3"])
+        self.assertIsNone(repairs[0].confidence)
+        self.assertEqual(repairs[1].confidence, 0.8)
+        self.assertIsNone(repairs[2].confidence)
 
     def test_content_repair_prefers_matching_node_id(self):
         repair = parse_content_repair(
@@ -116,13 +123,26 @@ class ContentRepairParserTests(unittest.TestCase):
         self.assertEqual(repair.node_id, "other")
         self.assertEqual(repair.text, "Fallback text")
 
+    def test_content_repair_accepts_low_or_missing_confidence(self):
+        repair = parse_content_repair(
+            {
+                "items": [
+                    {"node_id": "target", "text": "고친 문장", "confidence": 0.0},
+                ]
+            },
+            "target",
+        )
+
+        self.assertIsNotNone(repair)
+        self.assertEqual(repair.text, "고친 문장")
+        self.assertIsNone(repair.confidence)
+
     def test_content_repair_filters_invalid_items(self):
         repair = parse_content_repair(
             {
                 "items": [
                     {"node_id": "", "text": "Missing node", "confidence": 0.9},
                     {"node_id": "target", "text": "", "confidence": 0.9},
-                    {"node_id": "target", "text": "Low confidence", "confidence": 0.49},
                 ]
             },
             "target",

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 """Assembly IR 생성 공개 진입점을 제공한다."""
 
+from pathlib import Path
 from typing import Any
 
 from modules.assembly.adapters import from_outputs as adapter_from_outputs
 from modules.assembly.adapters import from_raw as adapter_from_raw
 from modules.assembly.ir import AssemblyResult
-from modules.assembly.orchestration import AssemblyBuildTrace, AssemblyTraceBuilder
+from modules.assembly.pipeline import AssemblyBuildTrace, AssemblyPipeline
 from modules.assembly.stages.contracts import require_assembly_result, require_stage
 from modules.assembly.stages.normalize_filter import NormalizeFilter
 from modules.assembly.stages.structure import StructureAssembler
@@ -62,11 +63,21 @@ class DocumentAssembler:
         content_enricher: Any = None,
     ) -> AssemblyBuildTrace:
         """layout/table 출력에서 validated AssemblyResult와 중간 단계 trace를 만든다."""
-        return AssemblyTraceBuilder(
+        return AssemblyPipeline(
             self,
             semantic_enricher=semantic_enricher,
             content_enricher=content_enricher,
         ).build_from_outputs(layout_output, table_output)
+
+    @staticmethod
+    def get_output_subdir() -> Path | None:
+        """현재 환경에서 assembly가 소유하는 출력 variant 하위 경로를 돌려준다."""
+        from modules.assembly.stages.enrichment import LLMConfig
+
+        config = LLMConfig.from_env()
+        if not config.uses_enrichment():
+            return None
+        return Path("llm_enrichment") / config.mode
 
     @staticmethod
     def normalize(seed_result: AssemblyResult) -> AssemblyResult:
