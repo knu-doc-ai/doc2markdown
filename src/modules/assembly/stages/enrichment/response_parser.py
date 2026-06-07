@@ -34,7 +34,7 @@ class CaptionLink:
 class ContentRepair:
     node_id: str
     text: str
-    confidence: float
+    confidence: float | None = None
 
 
 @dataclass(frozen=True)
@@ -121,11 +121,14 @@ def _parse_content_repair(item: Any) -> ContentRepair | None:
 
     node_id = _normalize_str(item.get("node_id"))
     text = _normalize_str(item.get("text"))
-    confidence = _normalize_float(item.get("confidence"))
-    if node_id is None or text is None or confidence < MIN_CONFIDENCE:
+    if node_id is None or text is None:
         return None
 
-    return ContentRepair(node_id=node_id, text=text, confidence=confidence)
+    return ContentRepair(
+        node_id=node_id,
+        text=text,
+        confidence=_normalize_optional_confidence(item.get("confidence")),
+    )
 
 
 def _extract_list(response: Any, keys: tuple[str, ...]) -> list[Any]:
@@ -161,3 +164,12 @@ def _normalize_float(value: Any) -> float:
     except (TypeError, ValueError):
         return 0.0
     return normalized if math.isfinite(normalized) else 0.0
+
+
+def _normalize_optional_confidence(value: Any) -> float | None:
+    if value is None:
+        return None
+    normalized = _normalize_float(value)
+    if normalized < MIN_CONFIDENCE:
+        return None
+    return normalized

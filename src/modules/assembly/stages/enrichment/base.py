@@ -6,7 +6,7 @@ from dataclasses import replace
 from typing import Any
 
 from modules.assembly.ir import AssemblyResult, AssemblyWarning
-from modules.assembly.stages.enrichment.client import LLMClient, LocalTransformersLLMClient
+from modules.assembly.stages.enrichment.client import LLMClient, create_llm_client
 from modules.assembly.stages.enrichment.config import LLMConfig
 
 
@@ -23,13 +23,13 @@ class _BaseEnricher:
 
     def _client(self) -> LLMClient:
         if self.client is None:
-            self.client = LocalTransformersLLMClient(self.config)
+            self.client = create_llm_client(self.config)
         return self.client
 
     def _llm_metadata(self, task: str, confidence: float | None) -> dict[str, Any]:
         return {
             "llm_enriched": True,
-            "llm_model": self.config.model_id,
+            "llm_model": self.config.model_id_for_task(task),
             "llm_task": task,
             "llm_confidence": confidence,
             "llm_enrichment_mode": self.config.mode,

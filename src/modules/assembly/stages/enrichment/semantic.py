@@ -20,6 +20,7 @@ from modules.assembly.stages.enrichment.base import (
     _BaseEnricher,
     _elapsed_seconds,
     _format_error,
+    _format_node_ids,
     non_space_signature,
 )
 from modules.assembly.stages.enrichment.response_parser import (
@@ -31,6 +32,7 @@ from modules.assembly.stages.enrichment.response_parser import (
 
 
 SEMANTIC_NUMERIC_HEADING_PATTERN = re.compile(r"^\s*\d+(?:\.\d+)*[.)]?\s+\S+")
+SEMANTIC_NUMERIC_HEADING_PREFIX_PATTERN = re.compile(r"^\s*(\d+(?:\.\d+)*)[.)]?\s+")
 SEMANTIC_CAPTION_PATTERN = re.compile(r"^\s*(?:table|tbl\.?|figure|fig\.?|표|그림)\s*\d+", re.IGNORECASE)
 SEMANTIC_NOTE_PATTERN = re.compile(r"^\s*(?:note\b|note:|source:|비고|주의|주\s*:)", re.IGNORECASE)
 SEMANTIC_TERMINAL_PUNCTUATION = tuple(".!?;:。！？")
@@ -47,19 +49,24 @@ class SemanticEnricher(_BaseEnricher):
             return result
 
         client = self._client()
+        model_id = self.config.model_id_for_task(SEMANTIC_TASK)
         warnings: list[AssemblyWarning] = []
         summary: dict[str, Any] = {
             "semantic_enabled": True,
-            "model": client.model_id,
+            "model": model_id,
             "enrichment_mode": self.config.mode,
             "eligible_candidate_count": 0,
             "llm_candidate_count": 0,
             "skipped_candidate_count": 0,
             "candidate_reason_counts": {},
+            "semantic_batch_size": self.config.semantic_batch_size,
+            "batch_count": 0,
             "decision_count": 0,
             "applied_decision_count": 0,
             "caption_link_count": 0,
             "applied_caption_link_count": 0,
+            "failed_batch_count": 0,
+            "json_parse_failure_count": 0,
         }
 
         payload = self._build_semantic_payload(result)
@@ -69,29 +76,70 @@ class SemanticEnricher(_BaseEnricher):
         summary["skipped_candidate_count"] = candidate_stats.get("skipped_count", 0)
         summary["candidate_reason_counts"] = candidate_stats.get("reason_counts", {})
         print(
-            f"[LLM][Semantic] 시작: model={client.model_id}, "
+            f"[LLM][Semantic] 시작: model={model_id}, "
             f"candidates={len(payload['candidates'])}/{summary['eligible_candidate_count']}, "
             f"skipped={summary['skipped_candidate_count']}, objects={len(payload['objects'])}, "
-            f"max_new_tokens={self.config.max_new_tokens_for_task(SEMANTIC_TASK)}"
+            f"max_new_tokens={self.config.max_new_tokens_for_task(SEMANTIC_TASK)}, "
+            f"batch_size={self.config.semantic_batch_size}"
         )
         if not payload["candidates"]:
             print("[LLM][Semantic] 후보 없음: LLM 호출 건너뜀")
             return self._with_metadata_and_warnings(result, "semantic", summary, warnings)
 
         started_at = time.perf_counter()
-        try:
-            response = client.generate_json(SEMANTIC_TASK, payload)
-        except Exception as error:
+        parsed_decisions: list[SemanticDecision] = []
+        parsed_caption_links: list[CaptionLink] = []
+        batches = self._build_semantic_batch_payloads(payload, self.config.semantic_batch_size)
+        summary["batch_count"] = len(batches)
+        for batch_index, batch_payload in enumerate(batches, start=1):
+            batch_candidates = batch_payload.get("candidates") or []
+            batch_ids = [
+                str(candidate.get("id") or "")
+                for candidate in batch_candidates
+                if isinstance(candidate, dict) and candidate.get("id")
+            ]
+            batch_started_at = time.perf_counter()
             print(
-                f"[LLM][Semantic] 실패: error={type(error).__name__}, "
-                f"message={_format_error(error)}, elapsed={_elapsed_seconds(started_at)}s"
+                f"[LLM][Semantic] batch {batch_index}/{len(batches)} 시작: "
+                f"items={len(batch_candidates)}, candidate_ids={_format_node_ids(batch_ids)}"
             )
-            warnings.append(self._warning("llm_semantic_failed", str(error)))
-            return self._with_metadata_and_warnings(result, "semantic", summary, warnings)
+            try:
+                response = client.generate_json(SEMANTIC_TASK, batch_payload)
+                parsed_batch = parse_semantic_response(response)
+            except Exception as error:
+                summary["failed_batch_count"] += 1
+                if error.__class__.__name__ == "LLMGenerationError":
+                    summary["json_parse_failure_count"] += 1
+                print(
+                    f"[LLM][Semantic] batch {batch_index}/{len(batches)} 실패: "
+                    f"items={len(batch_candidates)}, error={type(error).__name__}, "
+                    f"message={_format_error(error)}, elapsed={_elapsed_seconds(batch_started_at)}s"
+                )
+                warnings.append(
+                    self._warning(
+                        "llm_semantic_failed",
+                        str(error),
+                        element_ids=batch_ids,
+                        metadata={"batch_index": batch_index, "batch_size": len(batch_candidates)},
+                    )
+                )
+                continue
 
-        parsed_response = parse_semantic_response(response)
-        summary["decision_count"] = len(parsed_response.decisions)
-        summary["caption_link_count"] = len(parsed_response.caption_links)
+            parsed_decisions.extend(parsed_batch.decisions)
+            parsed_caption_links.extend(parsed_batch.caption_links)
+            print(
+                f"[LLM][Semantic] batch {batch_index}/{len(batches)} 완료: "
+                f"decisions={len(parsed_batch.decisions)}, caption_links={len(parsed_batch.caption_links)}, "
+                f"elapsed={_elapsed_seconds(batch_started_at)}s"
+            )
+
+        rule_decisions = self._build_rule_based_semantic_decisions(payload)
+        decisions = self._merge_semantic_decisions(parsed_decisions, rule_decisions)
+        summary["decision_count"] = len(decisions)
+        summary["rule_decision_count"] = len(rule_decisions)
+        summary["caption_link_count"] = len(parsed_caption_links)
+        if rule_decisions:
+            print(f"[LLM][Semantic] rule decisions: count={len(rule_decisions)}")
         print(
             f"[LLM][Semantic] 응답 파싱 완료: decisions={summary['decision_count']}, "
             f"caption_links={summary['caption_link_count']}, elapsed={_elapsed_seconds(started_at)}s"
@@ -99,13 +147,13 @@ class SemanticEnricher(_BaseEnricher):
 
         updated_elements, applied_decisions = self._apply_decisions(
             result.ordered_elements,
-            parsed_response.decisions,
+            decisions,
             warnings,
         )
         updated_document, applied_links = self._apply_caption_links(
             result.document,
             updated_elements,
-            parsed_response.caption_links,
+            parsed_caption_links,
             warnings,
         )
         summary["applied_decision_count"] = applied_decisions
@@ -182,6 +230,36 @@ class SemanticEnricher(_BaseEnricher):
         }
 
     @staticmethod
+    def _build_semantic_batch_payloads(payload: dict[str, Any], batch_size: int) -> list[dict[str, Any]]:
+        candidates = [
+            candidate
+            for candidate in payload.get("candidates") or []
+            if isinstance(candidate, dict)
+        ]
+        if not candidates:
+            return []
+
+        batch_size = max(1, batch_size)
+        batches: list[dict[str, Any]] = []
+        for index in range(0, len(candidates), batch_size):
+            batch_candidates = candidates[index:index + batch_size]
+            batches.append(
+                {
+                    "schema": payload.get("schema"),
+                    "candidates": batch_candidates,
+                    "objects": payload.get("objects") or [],
+                    "page_stats": payload.get("page_stats") or [],
+                    "candidate_stats": {
+                        **dict(payload.get("candidate_stats") or {}),
+                        "included_count": len(batch_candidates),
+                        "batch_index": len(batches) + 1,
+                        "batch_count": (len(candidates) + batch_size - 1) // batch_size,
+                    },
+                }
+            )
+        return batches
+
+    @staticmethod
     def _build_semantic_candidate(element: AssemblyElement, page_stat: Any | None) -> dict[str, Any] | None:
         text = (element.text or "").strip()
         if not text:
@@ -253,6 +331,146 @@ class SemanticEnricher(_BaseEnricher):
         if URL_PATTERN.search(normalized) or "`" in normalized:
             return False
         return True
+
+    @staticmethod
+    def _build_rule_based_semantic_decisions(payload: dict[str, Any]) -> list[SemanticDecision]:
+        decisions: list[SemanticDecision] = []
+        candidates = [candidate for candidate in payload.get("candidates") or [] if isinstance(candidate, dict)]
+        supported_top_level_ids = SemanticEnricher._collect_supported_top_level_numeric_ids(candidates)
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            if candidate.get("kind") == "heading":
+                continue
+
+            reason = candidate.get("semantic_reason")
+            if reason in {"label_heading", "height_title_like"}:
+                decision = SemanticEnricher._build_non_numeric_heading_decision(candidate, reason)
+                if decision is not None:
+                    decisions.append(decision)
+                continue
+            if reason != "numeric_heading_pattern":
+                continue
+
+            text = str(candidate.get("text") or "").strip()
+            if not SemanticEnricher._is_short_title_like(text):
+                continue
+
+            match = SEMANTIC_NUMERIC_HEADING_PREFIX_PATTERN.match(text)
+            if match is None:
+                continue
+
+            numeric_prefix = match.group(1)
+            heading_level = max(1, min(6, numeric_prefix.count(".") + 1))
+            element_id = str(candidate.get("id") or "").strip()
+            if not element_id:
+                continue
+
+            if heading_level == 1 and not SemanticEnricher._has_top_level_heading_support(
+                candidate,
+                element_id,
+                supported_top_level_ids,
+            ):
+                continue
+
+            decisions.append(
+                SemanticDecision(
+                    id=element_id,
+                    kind="heading",
+                    heading_level=heading_level,
+                    confidence=0.99,
+                )
+            )
+        return decisions
+
+    @staticmethod
+    def _build_non_numeric_heading_decision(
+        candidate: dict[str, Any],
+        reason: Any,
+    ) -> SemanticDecision | None:
+        text = str(candidate.get("text") or "").strip()
+        if not SemanticEnricher._is_short_title_like(text):
+            return None
+
+        element_id = str(candidate.get("id") or "").strip()
+        if not element_id:
+            return None
+
+        return SemanticDecision(
+            id=element_id,
+            kind="heading",
+            heading_level=SemanticEnricher._heading_level_from_height(candidate),
+            confidence=0.95 if reason == "label_heading" else 0.9,
+        )
+
+    @staticmethod
+    def _heading_level_from_height(candidate: dict[str, Any]) -> int:
+        try:
+            height_ratio = float(candidate.get("height_to_body_ratio"))
+        except (TypeError, ValueError):
+            return 2
+        if height_ratio >= 1.8:
+            return 1
+        if height_ratio >= SEMANTIC_HEADING_HEIGHT_RATIO:
+            return 2
+        return 2
+
+    @staticmethod
+    def _collect_supported_top_level_numeric_ids(candidates: list[dict[str, Any]]) -> set[str]:
+        entries: list[tuple[int, str, int, str]] = []
+        for index, candidate in enumerate(candidates):
+            if candidate.get("semantic_reason") != "numeric_heading_pattern":
+                continue
+            text = str(candidate.get("text") or "").strip()
+            if not SemanticEnricher._is_short_title_like(text):
+                continue
+            match = SEMANTIC_NUMERIC_HEADING_PREFIX_PATTERN.match(text)
+            element_id = str(candidate.get("id") or "").strip()
+            if match is None or not element_id:
+                continue
+            prefix = match.group(1)
+            entries.append((index, prefix, prefix.count(".") + 1, element_id))
+
+        supported_ids: set[str] = set()
+        for child_index, child_prefix, child_level, _ in entries:
+            if child_level <= 1:
+                continue
+            parent_prefix = child_prefix.split(".", 1)[0]
+            previous_parent_candidates = [
+                (index, element_id)
+                for index, prefix, level, element_id in entries
+                if level == 1 and prefix == parent_prefix and index < child_index
+            ]
+            if previous_parent_candidates:
+                supported_ids.add(max(previous_parent_candidates, key=lambda item: item[0])[1])
+        return supported_ids
+
+    @staticmethod
+    def _has_top_level_heading_support(
+        candidate: dict[str, Any],
+        element_id: str,
+        supported_top_level_ids: set[str],
+    ) -> bool:
+        if element_id in supported_top_level_ids:
+            return True
+
+        try:
+            height_ratio = float(candidate.get("height_to_body_ratio"))
+        except (TypeError, ValueError):
+            return False
+        return height_ratio >= SEMANTIC_HEADING_HEIGHT_RATIO
+
+    @staticmethod
+    def _merge_semantic_decisions(
+        llm_decisions: list[SemanticDecision],
+        rule_decisions: list[SemanticDecision],
+    ) -> list[SemanticDecision]:
+        merged: dict[str, SemanticDecision] = {}
+        for decision in llm_decisions:
+            merged[decision.id] = decision
+        for decision in rule_decisions:
+            merged[decision.id] = decision
+        return list(merged.values())
 
     @staticmethod
     def _height_to_body_ratio(element: AssemblyElement, page_stat: Any | None) -> float | None:
